@@ -1,0 +1,502 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  *,
+  *::before,
+  *::after {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-user-drag: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  input,
+  textarea {
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
+  }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    background-color: #0b1017;
+    color: #f1f5f9;
+    font-family: 'Cairo', 'Outfit', system-ui, -apple-system, sans-serif;
+    overscroll-behavior: none;
+    touch-action: manipulation;
+  }
+
+  [dir='ltr'] body {
+    font-family: 'Outfit', 'Cairo', system-ui, -apple-system, sans-serif;
+  }
+}
+
+.font-num {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes siren-red {
+  0%, 49% {
+    opacity: 1;
+    filter: drop-shadow(0 0 10px rgba(239, 68, 68, 1));
+  }
+  50%, 100% {
+    opacity: 0.22;
+    filter: none;
+  }
+}
+
+@keyframes siren-blue {
+  0%, 49% {
+    opacity: 0.22;
+    filter: none;
+  }
+  50%, 100% {
+    opacity: 1;
+    filter: drop-shadow(0 0 10px rgba(59, 130, 246, 1));
+  }
+}
+
+@keyframes siren-halo-red {
+  0%, 49% {
+    opacity: 0.55;
+    transform: scale(1.06);
+  }
+  50%, 100% {
+    opacity: 0.05;
+    transform: scale(0.85);
+  }
+}
+
+@keyframes siren-halo-blue {
+  0%, 49% {
+    opacity: 0.05;
+    transform: scale(0.85);
+  }
+  50%, 100% {
+    opacity: 0.55;
+    transform: scale(1.06);
+  }
+}
+
+@keyframes hint-nudge-h {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(var(--nudge-x, 12px));
+  }
+}
+
+@keyframes hint-nudge-v {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(var(--nudge-y, 12px));
+  }
+}
+
+@keyframes bump-h {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  22% {
+    transform: translateX(-5px);
+  }
+  45% {
+    transform: translateX(5px);
+  }
+  70% {
+    transform: translateX(-3px);
+  }
+}
+
+@keyframes bump-v {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  22% {
+    transform: translateY(-5px);
+  }
+  45% {
+    transform: translateY(5px);
+  }
+  70% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes snap-pop {
+  0% {
+    transform: scale(1.045);
+  }
+  55% {
+    transform: scale(0.975);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes confetti-pop {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) rotate(0deg) scale(0.75);
+  }
+  20% {
+    opacity: 1;
+    transform: translate(calc(var(--tx, 0px) * 0.35), calc(var(--ty, -120px) * 0.45)) rotate(calc(var(--rot, 240deg) * 0.3)) scale(1.15);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--tx, 0px), calc(var(--ty, -120px) + 55px)) rotate(var(--rot, 240deg)) scale(0.8);
+  }
+}
+
+@keyframes shockwave-ring {
+  0% {
+    opacity: 0.9;
+    transform: translate(-50%, -50%) scale(0.25);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(2.8);
+  }
+}
+
+@keyframes exit-chevron {
+  0%, 100% {
+    opacity: 0.25;
+    transform: translateY(-2px);
+  }
+  50% {
+    opacity: 0.95;
+    transform: translateY(3px);
+  }
+}
+
+@keyframes runway-flow {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 0 36px;
+  }
+}
+
+@keyframes slot-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(250, 204, 21, 0.35), inset 0 0 14px rgba(250, 204, 21, 0.16);
+  }
+  50% {
+    box-shadow: 0 0 18px 2px rgba(250, 204, 21, 0.45), inset 0 0 22px rgba(250, 204, 21, 0.28);
+  }
+}
+
+.animate-siren-red {
+  animation: siren-red 0.38s linear infinite;
+}
+
+.animate-siren-blue {
+  animation: siren-blue 0.38s linear infinite;
+}
+
+.animate-siren-halo-red {
+  animation: siren-halo-red 0.38s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.animate-siren-halo-blue {
+  animation: siren-halo-blue 0.38s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.animate-hint-h {
+  animation: hint-nudge-h 0.95s ease-in-out infinite;
+}
+
+.animate-hint-v {
+  animation: hint-nudge-v 0.95s ease-in-out infinite;
+}
+
+.animate-bump-h {
+  animation: bump-h 0.26s ease-out;
+}
+
+.animate-bump-v {
+  animation: bump-v 0.26s ease-out;
+}
+
+.animate-snap-pop {
+  animation: snap-pop 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.animate-confetti {
+  animation: confetti-pop 1.1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-shockwave {
+  animation: shockwave-ring 0.75s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-exit-chevron {
+  animation: exit-chevron 1.2s ease-in-out infinite;
+}
+
+.animate-slot-pulse {
+  animation: slot-pulse 1.5s ease-in-out infinite;
+}
+
+.hazard-stripes {
+  background: repeating-linear-gradient(
+    -45deg,
+    #facc15 0px,
+    #facc15 7px,
+    #18181b 7px,
+    #18181b 14px
+  );
+}
+
+.boom-stripes {
+  background: repeating-linear-gradient(
+    90deg,
+    #ef4444 0px,
+    #ef4444 9px,
+    #f8fafc 9px,
+    #f8fafc 18px
+  );
+}
+
+.asphalt-surface {
+  background-color: #1c222c;
+  background-image:
+    radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 0),
+    radial-gradient(rgba(0, 0, 0, 0.25) 1px, transparent 0),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, rgba(0, 0, 0, 0.16) 100%);
+  background-size: 14px 14px, 11px 11px, 100% 100%;
+  background-position: 0 0, 5px 6px, 0 0;
+}
+
+.asphalt-night {
+  background-color: #0b111c;
+  background-image:
+    radial-gradient(circle at 15% 15%, rgba(251, 191, 36, 0.08), transparent 38%),
+    radial-gradient(circle at 85% 85%, rgba(56, 189, 248, 0.07), transparent 40%),
+    radial-gradient(rgba(148, 163, 184, 0.04) 1px, transparent 0);
+  background-size: 100% 100%, 100% 100%, 14px 14px;
+}
+
+.asphalt-rain {
+  background-color: #101925;
+  background-image:
+    radial-gradient(ellipse at 25% 30%, rgba(56, 189, 248, 0.09), transparent 45%),
+    radial-gradient(ellipse at 75% 72%, rgba(14, 165, 233, 0.08), transparent 45%),
+    linear-gradient(160deg, rgba(148, 163, 184, 0.06) 0%, transparent 45%, rgba(56, 189, 248, 0.05) 100%);
+}
+
+.asphalt-snow {
+  background-color: #1c2532;
+  background-image:
+    radial-gradient(circle at 20% 20%, rgba(186, 230, 253, 0.08), transparent 42%),
+    radial-gradient(circle at 82% 80%, rgba(224, 242, 254, 0.07), transparent 45%),
+    radial-gradient(rgba(224, 242, 254, 0.04) 1px, transparent 0);
+  background-size: 100% 100%, 100% 100%, 16px 16px;
+}
+
+.asphalt-sunset {
+  background-color: #1e1926;
+  background-image:
+    linear-gradient(180deg, rgba(251, 146, 60, 0.08) 0%, transparent 50%, rgba(168, 85, 247, 0.07) 100%),
+    radial-gradient(rgba(253, 186, 116, 0.04) 1px, transparent 0);
+  background-size: 100% 100%, 14px 14px;
+}
+
+.asphalt-desert {
+  background-color: #26201a;
+  background-image:
+    radial-gradient(rgba(251, 191, 36, 0.05) 1px, transparent 0),
+    radial-gradient(rgba(0, 0, 0, 0.25) 1px, transparent 0),
+    linear-gradient(180deg, rgba(245, 158, 11, 0.05) 0%, rgba(0, 0, 0, 0.22) 100%);
+  background-size: 14px 14px, 11px 11px, 100% 100%;
+}
+
+.asphalt-cyber {
+  background-color: #090d16;
+  background-image:
+    radial-gradient(circle at 18% 20%, rgba(34, 211, 238, 0.1), transparent 42%),
+    radial-gradient(circle at 82% 82%, rgba(232, 121, 249, 0.09), transparent 44%),
+    radial-gradient(rgba(34, 211, 238, 0.05) 1px, transparent 0);
+  background-size: 100% 100%, 100% 100%, 16px 16px;
+}
+
+.asphalt-autumn {
+  background-color: #1f1b19;
+  background-image:
+    radial-gradient(circle at 20% 25%, rgba(249, 115, 22, 0.06), transparent 45%),
+    radial-gradient(rgba(251, 146, 60, 0.04) 1px, transparent 0);
+  background-size: 100% 100%, 14px 14px;
+}
+
+.parkway-grass {
+  background-color: #466923;
+  background-image:
+    radial-gradient(circle at 20% 25%, rgba(163, 230, 53, 0.18), transparent 45%),
+    radial-gradient(circle at 80% 75%, rgba(20, 83, 45, 0.35), transparent 50%),
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.025) 0px,
+      rgba(255, 255, 255, 0.025) 4px,
+      rgba(0, 0, 0, 0.03) 4px,
+      rgba(0, 0, 0, 0.03) 8px
+    );
+}
+
+.parkway-night {
+  background-color: #121c2b;
+  background-image:
+    radial-gradient(circle at 10% 10%, rgba(251, 191, 36, 0.22), transparent 34%),
+    radial-gradient(circle at 90% 10%, rgba(251, 191, 36, 0.2), transparent 34%),
+    radial-gradient(circle at 12% 90%, rgba(56, 189, 248, 0.14), transparent 35%),
+    radial-gradient(circle at 88% 90%, rgba(56, 189, 248, 0.14), transparent 35%);
+}
+
+.parkway-rain {
+  background-color: #162936;
+  background-image:
+    radial-gradient(circle at 18% 18%, rgba(56, 189, 248, 0.18), transparent 42%),
+    radial-gradient(circle at 85% 82%, rgba(14, 165, 233, 0.14), transparent 42%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.32) 0%, rgba(15, 23, 42, 0.58) 100%);
+}
+
+.parkway-snow {
+  background-color: #5b6e82;
+  background-image:
+    radial-gradient(circle at 20% 20%, rgba(224, 242, 254, 0.3), transparent 46%),
+    radial-gradient(circle at 80% 78%, rgba(148, 163, 184, 0.35), transparent 50%),
+    linear-gradient(180deg, rgba(241, 245, 249, 0.15) 0%, rgba(30, 41, 59, 0.35) 100%);
+}
+
+.parkway-sunset {
+  background-color: #6b2d45;
+  background-image:
+    radial-gradient(circle at 18% 15%, rgba(251, 146, 60, 0.42), transparent 48%),
+    radial-gradient(circle at 82% 85%, rgba(109, 40, 217, 0.42), transparent 52%),
+    linear-gradient(160deg, rgba(249, 115, 22, 0.22) 0%, rgba(49, 46, 129, 0.45) 100%);
+}
+
+.parkway-desert {
+  background-color: #936a39;
+  background-image:
+    radial-gradient(circle at 22% 22%, rgba(253, 224, 71, 0.18), transparent 48%),
+    radial-gradient(circle at 80% 78%, rgba(120, 53, 15, 0.4), transparent 55%),
+    repeating-linear-gradient(
+      125deg,
+      rgba(255, 255, 255, 0.03) 0px,
+      rgba(255, 255, 255, 0.03) 6px,
+      rgba(0, 0, 0, 0.04) 6px,
+      rgba(0, 0, 0, 0.04) 12px
+    );
+}
+
+.parkway-cyber {
+  background-color: #0e1629;
+  background-image:
+    radial-gradient(circle at 15% 15%, rgba(34, 211, 238, 0.25), transparent 40%),
+    radial-gradient(circle at 85% 85%, rgba(217, 70, 239, 0.24), transparent 42%),
+    linear-gradient(135deg, rgba(6, 182, 212, 0.12) 0%, rgba(168, 85, 247, 0.12) 100%);
+}
+
+.parkway-autumn {
+  background-color: #88451f;
+  background-image:
+    radial-gradient(circle at 22% 22%, rgba(251, 191, 36, 0.22), transparent 48%),
+    radial-gradient(circle at 82% 78%, rgba(127, 29, 29, 0.42), transparent 52%),
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.025) 0px,
+      rgba(255, 255, 255, 0.025) 5px,
+      rgba(0, 0, 0, 0.04) 5px,
+      rgba(0, 0, 0, 0.04) 10px
+    );
+}
+
+@keyframes gpu-precip-fall {
+  0% {
+    transform: translate3d(0, -50%, 0);
+  }
+  100% {
+    transform: translate3d(0, 0%, 0);
+  }
+}
+
+.rain-layer-gpu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 200%;
+  will-change: transform;
+  background-image:
+    radial-gradient(1.5px 11px at 22px 26px, rgba(186, 230, 253, 0.28), transparent 70%),
+    radial-gradient(1.2px 9px at 64px 58px, rgba(125, 211, 252, 0.22), transparent 70%),
+    radial-gradient(1.4px 10px at 104px 18px, rgba(224, 242, 254, 0.2), transparent 70%);
+  background-size: 132px 112px;
+  animation: gpu-precip-fall 1.35s linear infinite;
+}
+
+.snow-layer-gpu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 200%;
+  will-change: transform;
+  background-image:
+    radial-gradient(2.2px 2.2px at 18px 24px, rgba(248, 250, 252, 0.45), transparent 70%),
+    radial-gradient(1.6px 1.6px at 66px 56px, rgba(224, 242, 254, 0.35), transparent 70%),
+    radial-gradient(2px 2px at 98px 84px, rgba(241, 245, 249, 0.32), transparent 70%);
+  background-size: 120px 108px;
+  animation: gpu-precip-fall 4.5s linear infinite;
+}
+
+.runway-flow {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(52, 211, 153, 0.28) 0px,
+    rgba(52, 211, 153, 0.28) 9px,
+    rgba(16, 185, 129, 0.06) 9px,
+    rgba(16, 185, 129, 0.06) 20px
+  );
+  background-size: 100% 40px;
+  animation: runway-flow 0.85s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-siren-red,
+  .animate-siren-blue,
+  .animate-siren-halo-red,
+  .animate-siren-halo-blue,
+  .animate-hint-h,
+  .animate-hint-v,
+  .animate-bump-h,
+  .animate-bump-v,
+  .animate-snap-pop,
+  .animate-confetti,
+  .animate-shockwave,
+  .animate-exit-chevron,
+  .animate-slot-pulse,
+  .rain-layer-gpu,
+  .snow-layer-gpu,
+  .runway-flow {
+    animation: none !important;
+  }
+}
