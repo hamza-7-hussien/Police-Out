@@ -20,7 +20,7 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react';
-import gameLogo from '../assets/images/police_parking_logo_1794671133147.jpg';
+import gameLogo from '../assets/images/police_parking_logo.webp';
 import {
   getDailyChallengeLevelId,
   getMaxMovesBudget,
@@ -192,6 +192,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 <img
                   src={gameLogo}
                   alt={t.appTitle}
+                  width={44}
+                  height={44}
+                  decoding="async"
                   referrerPolicy="no-referrer"
                   onError={() => setLogoError(true)}
                   className="w-full h-full object-cover"
@@ -267,6 +270,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   <img
                     src={user.photoURL}
                     alt=""
+                    loading="lazy"
+                    decoding="async"
                     referrerPolicy="no-referrer"
                     className="w-5 h-5 rounded-md object-cover"
                   />

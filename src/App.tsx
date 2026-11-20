@@ -26,13 +26,14 @@ import {
   VolumeX,
   X,
 } from 'lucide-react';
-import gameLogo from './assets/images/police_parking_logo_1794671133147.jpg';
+import gameLogo from './assets/images/police_parking_logo.webp';
 import { AuthScreen } from './components/AuthScreen';
 import { Board } from './components/Board';
 import { HomeScreen } from './components/HomeScreen';
 import { HubModal, HubTab } from './components/HubModal';
 import { LevelSelectModal } from './components/LevelSelectModal';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAControls';
+import { AppBootSkeleton } from './components/Skeleton';
 import { SolutionBar } from './components/SolutionBar';
 import { TutorialOverlay } from './components/TutorialOverlay';
 import { VictoryModal } from './components/VictoryModal';
@@ -1195,13 +1196,7 @@ export default function App() {
   };
 
   if (!authReady) {
-    return (
-      <div className="min-h-[100dvh] w-full bg-[#0e131b] text-slate-100 flex items-center justify-center">
-        <div className="w-14 h-14 rounded-2xl bg-slate-900 border border-slate-700/80 flex items-center justify-center text-amber-400 shadow-lg animate-pulse">
-          <Shield className="w-7 h-7" />
-        </div>
-      </div>
-    );
+    return <AppBootSkeleton />;
   }
 
   if (!guestMode && (!authUser || !authUser.emailVerified)) {
@@ -1279,6 +1274,9 @@ export default function App() {
                         <img
                           src={gameLogo}
                           alt={t.appTitle}
+                          width={36}
+                          height={36}
+                          decoding="async"
                           referrerPolicy="no-referrer"
                           onError={() => setHeaderLogoError(true)}
                           className="w-full h-full object-cover"
@@ -1356,6 +1354,8 @@ export default function App() {
                       <img
                         src={authUser.photoURL}
                         alt=""
+                        loading="lazy"
+                        decoding="async"
                         referrerPolicy="no-referrer"
                         className="w-5 h-5 rounded-md object-cover"
                       />

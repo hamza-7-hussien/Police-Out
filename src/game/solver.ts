@@ -123,17 +123,45 @@ export function isGoalClear(vehicles: Vehicle[]): boolean {
   return true;
 }
 
+const SOLVE_CACHE = new Map<string, MoveStep[] | null>();
+const MAX_SOLVE_CACHE_ENTRIES = 512;
+
+function serializeBoardKey(vehicles: Vehicle[], maxStates: number): string {
+  return (
+    vehicles
+      .map((v) => `${v.id}:${v.kind}${v.dir}${v.row}${v.col}${v.len}`)
+      .join('|') + `@${maxStates}`
+  );
+}
+
 /**
- * Exact BFS solver for any 6x6 board state.
+ * Exact BFS solver for any 6x6 board state (with bounded memoization cache).
  * Note on move counting (matching the booklet's "Mobile N"):
  * - Each continuous slide of a vehicle to a new position counts as 1 move.
  * - Moving the Police Car to row 4 (the exit gate) is the final winning move!
  *   (If the police car is already at row 4, 0 moves remain.)
  */
 export function solvePuzzle(vehicles: Vehicle[], maxStates = 120000): MoveStep[] | null {
+  const cacheKey = serializeBoardKey(vehicles, maxStates);
+  if (SOLVE_CACHE.has(cacheKey)) {
+    const cached = SOLVE_CACHE.get(cacheKey);
+    return cached ? cached.map((step) => ({ ...step })) : null;
+  }
+
+  const storeCached = (result: MoveStep[] | null): MoveStep[] | null => {
+    if (SOLVE_CACHE.size >= MAX_SOLVE_CACHE_ENTRIES) {
+      const oldestKey = SOLVE_CACHE.keys().next().value;
+      if (oldestKey !== undefined) {
+        SOLVE_CACHE.delete(oldestKey);
+      }
+    }
+    SOLVE_CACHE.set(cacheKey, result ? result.map((s) => ({ ...s })) : null);
+    return result;
+  };
+
   const n = vehicles.length;
   const policeIdx = vehicles.findIndex((v) => v.kind === 'P');
-  if (policeIdx === -1) return null;
+  if (policeIdx === -1) return storeCached(null);
 
   const initialPos = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
@@ -141,7 +169,7 @@ export function solvePuzzle(vehicles: Vehicle[], maxStates = 120000): MoveStep[]
   }
 
   if (initialPos[policeIdx] === EXIT_ROW) {
-    return [];
+    return storeCached([]);
   }
 
   // Pack positions (each 0..4 fits in 3 bits, or simply string key for up to ~16 cars)
@@ -228,7 +256,7 @@ export function solvePuzzle(vehicles: Vehicle[], maxStates = 120000): MoveStep[]
         addMove(chain[i].moveVehicleIdx, chain[i].fromPos, chain[i].toPos);
       }
       addMove(policeIdx, pPos, EXIT_ROW);
-      return steps;
+      return storeCached(steps);
     }
 
     // Generate all valid slides
@@ -289,7 +317,7 @@ export function solvePuzzle(vehicles: Vehicle[], maxStates = 120000): MoveStep[]
     head++;
   }
 
-  return null;
+  return storeCached(null);
 }
 
 export function applyMove(vehicles: Vehicle[], step: MoveStep): Vehicle[] {

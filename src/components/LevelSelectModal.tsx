@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Check, Search, Star, X } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Check, ChevronLeft, ChevronRight, Search, Star, X } from 'lucide-react';
 import { ALL_LEVELS, DIFFICULTY_RANGES } from '../game/levels';
 import { Difficulty, Language, LevelProgress } from '../game/types';
 
@@ -11,12 +11,15 @@ interface LevelSelectModalProps {
   onClose: () => void;
 }
 
+const STAGES_PER_PAGE = 24;
+
 const COPY = {
   ar: {
     title: 'كل المراحل',
     solvedLabel: 'مرحلة مكتملة',
     jumpPlaceholder: 'انتقل لمرحلة (1 - 360)',
     go: 'اذهب',
+    pageOf: 'صفحة',
     tabs: {
       beginner: 'مبتدئ · 1-80',
       intermediate: 'متوسط · 81-208',
@@ -28,6 +31,7 @@ const COPY = {
     solvedLabel: 'Solved',
     jumpPlaceholder: 'Jump to stage (1 - 360)',
     go: 'Go',
+    pageOf: 'Page',
     tabs: {
       beginner: 'Beginner · 1-80',
       intermediate: 'Intermediate · 81-208',
@@ -35,6 +39,12 @@ const COPY = {
     },
   },
 };
+
+function getPageForLevel(tab: Difficulty, levelId: number): number {
+  const range = DIFFICULTY_RANGES[tab];
+  if (levelId < range.start || levelId > range.end) return 1;
+  return Math.floor((levelId - range.start) / STAGES_PER_PAGE) + 1;
+}
 
 export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
   language,
@@ -46,6 +56,7 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
   const initialTab: Difficulty =
     currentLevelId <= 80 ? 'beginner' : currentLevelId <= 208 ? 'intermediate' : 'advanced';
   const [tab, setTab] = useState<Difficulty>(initialTab);
+  const [page, setPage] = useState<number>(() => getPageForLevel(initialTab, currentLevelId));
   const [jumpInput, setJumpInput] = useState('');
 
   const t = COPY[language];
@@ -55,10 +66,22 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
     [progress]
   );
 
-  const visibleLevels = useMemo(() => {
+  const tabLevels = useMemo(() => {
     const range = DIFFICULTY_RANGES[tab];
     return ALL_LEVELS.filter((l) => l.id >= range.start && l.id <= range.end);
   }, [tab]);
+
+  const totalPages = Math.max(1, Math.ceil(tabLevels.length / STAGES_PER_PAGE));
+
+  useEffect(() => {
+    setPage(getPageForLevel(tab, currentLevelId));
+  }, [tab, currentLevelId]);
+
+  const visibleLevels = useMemo(() => {
+    const safePage = Math.min(page, totalPages);
+    const start = (safePage - 1) * STAGES_PER_PAGE;
+    return tabLevels.slice(start, start + STAGES_PER_PAGE);
+  }, [page, tabLevels, totalPages]);
 
   const handleJump = (e: React.FormEvent) => {
     e.preventDefault();
@@ -75,11 +98,11 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl h-[88dvh] sm:h-[80dvh] rounded-t-3xl sm:rounded-3xl bg-slate-900 border border-slate-700/80 flex flex-col overflow-hidden shadow-2xl"
+        className="w-full max-w-2xl h-[88dvh] sm:h-[82dvh] rounded-t-3xl sm:rounded-3xl bg-slate-900 border border-slate-700/80 flex flex-col overflow-hidden shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
           <div>
             <h2 className="text-lg font-bold text-white">{t.title}</h2>
             <p className="text-xs text-slate-400 font-num">
@@ -97,7 +120,7 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
         </div>
 
         {/* Difficulty Tabs + Quick Jump */}
-        <div className="px-4 pt-3 pb-2 space-y-2.5 border-b border-slate-800/70">
+        <div className="px-4 pt-3 pb-2 space-y-2.5 border-b border-slate-800/70 shrink-0">
           <div className="grid grid-cols-3 gap-1.5 bg-slate-950/80 p-1 rounded-xl">
             {(['beginner', 'intermediate', 'advanced'] as Difficulty[]).map((d) => (
               <button
@@ -142,7 +165,7 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
           </form>
         </div>
 
-        {/* Grid of Levels */}
+        {/* Paginated Grid of Levels (24 per page) */}
         <div className="flex-1 overflow-y-auto p-4 grid grid-cols-4 sm:grid-cols-6 gap-2.5 content-start">
           {visibleLevels.map((lvl) => {
             const p = progress[lvl.id];
@@ -188,6 +211,54 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
               </button>
             );
           })}
+        </div>
+
+        {/* Pagination Bar */}
+        <div className="px-4 py-3 border-t border-slate-800 bg-slate-950/70 flex items-center justify-between gap-2 shrink-0">
+          <button
+            type="button"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            aria-label="Previous page"
+            className="min-w-[38px] min-h-[38px] rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-35 text-slate-200 flex items-center justify-center cursor-pointer disabled:cursor-not-allowed"
+          >
+            {language === 'ar' ? (
+              <ChevronRight className="w-4 h-4" />
+            ) : (
+              <ChevronLeft className="w-4 h-4" />
+            )}
+          </button>
+
+          <div className="flex items-center gap-1.5 flex-wrap justify-center">
+            {Array.from({ length: totalPages }, (_, idx) => idx + 1).map((pNum) => (
+              <button
+                key={pNum}
+                type="button"
+                onClick={() => setPage(pNum)}
+                className={`min-w-[34px] min-h-[34px] px-2 rounded-lg text-xs font-extrabold font-num transition-colors cursor-pointer ${
+                  page === pNum
+                    ? 'bg-amber-400 text-slate-950 shadow'
+                    : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300'
+                }`}
+              >
+                {pNum}
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            aria-label="Next page"
+            className="min-w-[38px] min-h-[38px] rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-35 text-slate-200 flex items-center justify-center cursor-pointer disabled:cursor-not-allowed"
+          >
+            {language === 'ar' ? (
+              <ChevronLeft className="w-4 h-4" />
+            ) : (
+              <ChevronRight className="w-4 h-4" />
+            )}
+          </button>
         </div>
       </div>
     </div>

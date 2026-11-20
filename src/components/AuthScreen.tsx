@@ -38,7 +38,7 @@ import {
   X,
 } from 'lucide-react';
 import firebaseConfig from '../../firebase-applet-config.json';
-import gameLogo from '../assets/images/police_parking_logo_1794671133147.jpg';
+import gameLogo from '../assets/images/police_parking_logo.webp';
 import { auth, googleProvider } from '../firebase';
 import { Language } from '../game/types';
 
@@ -614,6 +614,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               <img
                 src={user.photoURL}
                 alt={displayName}
+                loading="lazy"
+                decoding="async"
                 referrerPolicy="no-referrer"
                 className="w-14 h-14 rounded-2xl object-cover border border-slate-700 shrink-0"
               />
@@ -922,6 +924,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 <img
                   src={gameLogo}
                   alt={t.brandTitle}
+                  width={48}
+                  height={48}
+                  decoding="async"
                   referrerPolicy="no-referrer"
                   onError={() => setLogoError(true)}
                   className="w-full h-full object-cover"

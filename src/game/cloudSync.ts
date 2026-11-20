@@ -2,13 +2,16 @@ import { User } from 'firebase/auth';
 import {
   collection,
   doc,
+  DocumentData,
   getDoc,
   getDocs,
   limit,
   orderBy,
   query,
+  QueryDocumentSnapshot,
   serverTimestamp,
   setDoc,
+  startAfter,
   updateDoc,
   where,
   writeBatch,
@@ -23,6 +26,35 @@ import {
   LeaderboardEntry,
   LevelProgress,
 } from './types';
+
+export const LEADERBOARD_PAGE_SIZE = 20;
+const CACHE_TTL_MS = 60_000;
+
+export interface PaginatedResult<T> {
+  entries: T[];
+  nextCursor: QueryDocumentSnapshot<DocumentData> | null;
+  hasMore: boolean;
+}
+
+interface CacheEntry<T> {
+  data: PaginatedResult<T>;
+  expiresAt: number;
+}
+
+let leaderboardFirstPageCache: CacheEntry<LeaderboardEntry> | null = null;
+const dailyFirstPageCache = new Map<string, CacheEntry<DailyScoreEntry>>();
+
+export function invalidateLeaderboardCache(): void {
+  leaderboardFirstPageCache = null;
+}
+
+export function invalidateDailyCache(dateKey?: string): void {
+  if (dateKey) {
+    dailyFirstPageCache.delete(dateKey);
+  } else {
+    dailyFirstPageCache.clear();
+  }
+}
 
 const VALID_THEMES: BoardTheme[] = ['classic', 'night', 'rain', 'desert', 'snow', 'sunset', 'cyber', 'autumn'];
 
@@ -93,6 +125,7 @@ export async function pushLeaderboardEntry(
 
   try {
     await setDoc(ref, payload);
+    invalidateLeaderboardCache();
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
@@ -109,34 +142,38 @@ export async function syncOnSignIn(
   const userPath = `users/${user.uid}`;
   const stagesPath = `users/${user.uid}/stages`;
   const userRef = doc(db, 'users', user.uid);
+  const stagesQuery = query(
+    collection(db, 'users', user.uid, 'stages'),
+    where('userId', '==', user.uid),
+    limit(360)
+  );
 
-  let cloudProfile: Record<string, unknown> | null = null;
-  try {
-    const snap = await getDoc(userRef);
-    cloudProfile = snap.exists() ? snap.data() : null;
-  } catch (err) {
-    handleFirestoreError(err, OperationType.GET, userPath);
+  // Run profile fetch & stage collection fetch in parallel (eliminates sequential latency)
+  const [userResult, stagesResult] = await Promise.allSettled([
+    getDoc(userRef),
+    getDocs(stagesQuery),
+  ]);
+
+  if (userResult.status === 'rejected') {
+    handleFirestoreError(userResult.reason, OperationType.GET, userPath);
   }
+  if (stagesResult.status === 'rejected') {
+    handleFirestoreError(stagesResult.reason, OperationType.LIST, stagesPath);
+  }
+
+  const snap = userResult.value;
+  const cloudProfile: Record<string, unknown> | null = snap.exists() ? snap.data() : null;
 
   const cloudProgress: Record<number, LevelProgress> = {};
-  try {
-    const q = query(
-      collection(db, 'users', user.uid, 'stages'),
-      where('userId', '==', user.uid)
-    );
-    const stagesSnap = await getDocs(q);
-    stagesSnap.forEach((docSnap) => {
-      const d = docSnap.data();
-      const lvl = clampInt(Number(d.levelId), 1, 360);
-      cloudProgress[lvl] = {
-        solved: Boolean(d.solved),
-        bestMoves: clampInt(Number(d.bestMoves), 1, 9999),
-        stars: clampInt(Number(d.stars), 0, 3) as 0 | 1 | 2 | 3,
-      };
-    });
-  } catch (err) {
-    handleFirestoreError(err, OperationType.LIST, stagesPath);
-  }
+  stagesResult.value.forEach((docSnap) => {
+    const d = docSnap.data();
+    const lvl = clampInt(Number(d.levelId), 1, 360);
+    cloudProgress[lvl] = {
+      solved: Boolean(d.solved),
+      bestMoves: clampInt(Number(d.bestMoves), 1, 9999),
+      stars: clampInt(Number(d.stars), 0, 3) as 0 | 1 | 2 | 3,
+    };
+  });
 
   const mergedProgress: Record<number, LevelProgress> = { ...cloudProgress };
   const stagesToPush: { levelId: number; prog: LevelProgress }[] = [];
@@ -249,6 +286,21 @@ export async function syncOnSignIn(
     );
   }
 
+  const nextSavedState: SavedState = {
+    ...localState,
+    currentLevelId: profilePayload.currentLevelId,
+    tutorialSeen: profilePayload.tutorialSeen,
+    muted: profilePayload.muted,
+    language: mergedLanguage,
+    selectedTheme: mergedTheme,
+    unlockedAchievements: mergedAchievements,
+    dailyCompletedDates: mergedDailyDates,
+    dailyStreak: profilePayload.dailyStreak,
+    progress: mergedProgress,
+  };
+
+  // Commit batched stage updates and leaderboard update concurrently
+  const stageBatchPromises: Promise<void>[] = [];
   for (let i = 0; i < stagesToPush.length; i += 400) {
     const chunk = stagesToPush.slice(i, i + 400);
     const batch = writeBatch(db);
@@ -263,27 +315,15 @@ export async function syncOnSignIn(
         updatedAt: serverTimestamp(),
       });
     }
-    try {
-      await batch.commit();
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, stagesPath);
-    }
+    stageBatchPromises.push(
+      batch.commit().catch((err) => handleFirestoreError(err, OperationType.WRITE, stagesPath))
+    );
   }
 
-  const nextSavedState: SavedState = {
-    ...localState,
-    currentLevelId: profilePayload.currentLevelId,
-    tutorialSeen: profilePayload.tutorialSeen,
-    muted: profilePayload.muted,
-    language: mergedLanguage,
-    selectedTheme: mergedTheme,
-    unlockedAchievements: mergedAchievements,
-    dailyCompletedDates: mergedDailyDates,
-    dailyStreak: profilePayload.dailyStreak,
-    progress: mergedProgress,
-  };
-
-  await pushLeaderboardEntry(user, nextSavedState);
+  await Promise.all([
+    ...stageBatchPromises,
+    pushLeaderboardEntry(user, nextSavedState),
+  ]);
 
   return nextSavedState;
 }
@@ -297,40 +337,46 @@ export async function pushStageProgressToCloud(
   if (!user || !user.emailVerified) return;
 
   const safeLevelId = clampInt(levelId, 1, 360);
-  const stagePath = `users/${user.uid}/stages/${safeLevelId}`;
-  const userPath = `users/${user.uid}`;
   const stageRef = doc(db, 'users', user.uid, 'stages', String(safeLevelId));
   const userRef = doc(db, 'users', user.uid);
+  const leaderboardRef = doc(db, 'leaderboard', user.uid);
   const { solvedCount, totalStars } = summarizeProgress(state.progress);
 
-  try {
-    await setDoc(stageRef, {
-      userId: user.uid,
-      levelId: safeLevelId,
-      solved: true,
-      bestMoves: clampInt(stageProg.bestMoves, 1, 9999),
-      stars: clampInt(stageProg.stars, 0, 3),
-      updatedAt: serverTimestamp(),
-    });
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, stagePath);
-  }
+  const batch = writeBatch(db);
+  batch.set(stageRef, {
+    userId: user.uid,
+    levelId: safeLevelId,
+    solved: true,
+    bestMoves: clampInt(stageProg.bestMoves, 1, 9999),
+    stars: clampInt(stageProg.stars, 0, 3),
+    updatedAt: serverTimestamp(),
+  });
+  batch.update(userRef, {
+    currentLevelId: clampInt(state.currentLevelId, 1, 360),
+    solvedCount,
+    totalStars,
+    unlockedAchievements: state.unlockedAchievements.slice(0, 30),
+    dailyCompletedDates: state.dailyCompletedDates.slice(-100),
+    dailyStreak: clampInt(state.dailyStreak, 0, 10000),
+    updatedAt: serverTimestamp(),
+  });
+  batch.set(leaderboardRef, {
+    uid: user.uid,
+    displayName: getSafeDisplayName(user),
+    photoURL: (user.photoURL ?? '').slice(0, 500),
+    solvedCount,
+    totalStars,
+    achievementsCount: clampInt(state.unlockedAchievements.length, 0, 30),
+    dailyStreak: clampInt(state.dailyStreak, 0, 10000),
+    updatedAt: serverTimestamp(),
+  });
 
   try {
-    await updateDoc(userRef, {
-      currentLevelId: clampInt(state.currentLevelId, 1, 360),
-      solvedCount,
-      totalStars,
-      unlockedAchievements: state.unlockedAchievements.slice(0, 30),
-      dailyCompletedDates: state.dailyCompletedDates.slice(-100),
-      dailyStreak: clampInt(state.dailyStreak, 0, 10000),
-      updatedAt: serverTimestamp(),
-    });
+    await batch.commit();
+    invalidateLeaderboardCache();
   } catch (err) {
-    handleFirestoreError(err, OperationType.UPDATE, userPath);
+    handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/stages/${safeLevelId}`);
   }
-
-  await pushLeaderboardEntry(user, state);
 }
 
 export async function pushPreferencesToCloud(
@@ -359,31 +405,70 @@ export async function pushPreferencesToCloud(
   }
 }
 
-export async function fetchLeaderboardTop(): Promise<LeaderboardEntry[]> {
+function mapLeaderboardDoc(docSnap: QueryDocumentSnapshot<DocumentData>): LeaderboardEntry {
+  const d = docSnap.data();
+  return {
+    uid: String(d.uid ?? docSnap.id),
+    displayName: String(d.displayName ?? 'Player'),
+    photoURL: String(d.photoURL ?? ''),
+    solvedCount: Number(d.solvedCount ?? 0),
+    totalStars: Number(d.totalStars ?? 0),
+    achievementsCount: Number(d.achievementsCount ?? 0),
+    dailyStreak: Number(d.dailyStreak ?? 0),
+  };
+}
+
+export async function fetchLeaderboardPage(
+  cursor: QueryDocumentSnapshot<DocumentData> | null = null,
+  forceRefresh = false,
+  pageSize = LEADERBOARD_PAGE_SIZE
+): Promise<PaginatedResult<LeaderboardEntry>> {
+  if (!cursor && !forceRefresh && leaderboardFirstPageCache) {
+    if (Date.now() < leaderboardFirstPageCache.expiresAt) {
+      return leaderboardFirstPageCache.data;
+    }
+  }
+
   const path = 'leaderboard';
   try {
-    const q = query(
-      collection(db, path),
-      where('totalStars', '>=', 0),
-      orderBy('totalStars', 'desc'),
-      limit(30)
-    );
+    const q = cursor
+      ? query(
+          collection(db, path),
+          where('totalStars', '>=', 0),
+          orderBy('totalStars', 'desc'),
+          startAfter(cursor),
+          limit(pageSize + 1)
+        )
+      : query(
+          collection(db, path),
+          where('totalStars', '>=', 0),
+          orderBy('totalStars', 'desc'),
+          limit(pageSize + 1)
+        );
     const snap = await getDocs(q);
-    return snap.docs.map((docSnap) => {
-      const d = docSnap.data();
-      return {
-        uid: String(d.uid ?? docSnap.id),
-        displayName: String(d.displayName ?? 'Player'),
-        photoURL: String(d.photoURL ?? ''),
-        solvedCount: Number(d.solvedCount ?? 0),
-        totalStars: Number(d.totalStars ?? 0),
-        achievementsCount: Number(d.achievementsCount ?? 0),
-        dailyStreak: Number(d.dailyStreak ?? 0),
+    const hasMore = snap.docs.length > pageSize;
+    const pageDocs = hasMore ? snap.docs.slice(0, pageSize) : snap.docs;
+    const result: PaginatedResult<LeaderboardEntry> = {
+      entries: pageDocs.map(mapLeaderboardDoc),
+      nextCursor: hasMore ? pageDocs[pageDocs.length - 1] : null,
+      hasMore,
+    };
+
+    if (!cursor) {
+      leaderboardFirstPageCache = {
+        data: result,
+        expiresAt: Date.now() + CACHE_TTL_MS,
       };
-    });
+    }
+    return result;
   } catch (err) {
     handleFirestoreError(err, OperationType.LIST, path);
   }
+}
+
+export async function fetchLeaderboardTop(): Promise<LeaderboardEntry[]> {
+  const res = await fetchLeaderboardPage(null, false, LEADERBOARD_PAGE_SIZE);
+  return res.entries;
 }
 
 export async function submitDailyScore(
@@ -423,6 +508,7 @@ export async function submitDailyScore(
         stars: Math.max(safeStars, clampInt(Number(prev.stars ?? 0), 0, 3)),
         updatedAt: serverTimestamp(),
       });
+      invalidateDailyCache(dateKey);
       return;
     }
 
@@ -437,38 +523,117 @@ export async function submitDailyScore(
       stars: safeStars,
       updatedAt: serverTimestamp(),
     });
+    invalidateDailyCache(dateKey);
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+function mapDailyScoreDoc(
+  docSnap: QueryDocumentSnapshot<DocumentData>,
+  fallbackDateKey: string
+): DailyScoreEntry {
+  const d = docSnap.data();
+  return {
+    userId: String(d.userId ?? ''),
+    dateKey: String(d.dateKey ?? fallbackDateKey),
+    levelId: Number(d.levelId ?? 1),
+    displayName: String(d.displayName ?? 'Player'),
+    photoURL: String(d.photoURL ?? ''),
+    moves: Number(d.moves ?? 9999),
+    timeSeconds: Number(d.timeSeconds ?? 86400),
+    stars: Number(d.stars ?? 0),
+  };
+}
+
+export async function fetchDailyLeaderboardPage(
+  dateKey: string,
+  cursor: QueryDocumentSnapshot<DocumentData> | null = null,
+  forceRefresh = false,
+  pageSize = LEADERBOARD_PAGE_SIZE
+): Promise<PaginatedResult<DailyScoreEntry>> {
+  if (!cursor && !forceRefresh) {
+    const cached = dailyFirstPageCache.get(dateKey);
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.data;
+    }
+  }
+
+  const path = 'dailyScores';
+  try {
+    // Use indexed composite query (dateKey ASC, moves ASC, timeSeconds ASC) for true top-N pagination
+    const q = cursor
+      ? query(
+          collection(db, path),
+          where('dateKey', '==', dateKey),
+          orderBy('moves', 'asc'),
+          orderBy('timeSeconds', 'asc'),
+          startAfter(cursor),
+          limit(pageSize + 1)
+        )
+      : query(
+          collection(db, path),
+          where('dateKey', '==', dateKey),
+          orderBy('moves', 'asc'),
+          orderBy('timeSeconds', 'asc'),
+          limit(pageSize + 1)
+        );
+    const snap = await getDocs(q);
+    const hasMore = snap.docs.length > pageSize;
+    const pageDocs = hasMore ? snap.docs.slice(0, pageSize) : snap.docs;
+    const result: PaginatedResult<DailyScoreEntry> = {
+      entries: pageDocs.map((docSnap) => mapDailyScoreDoc(docSnap, dateKey)),
+      nextCursor: hasMore ? pageDocs[pageDocs.length - 1] : null,
+      hasMore,
+    };
+
+    if (!cursor) {
+      dailyFirstPageCache.set(dateKey, {
+        data: result,
+        expiresAt: Date.now() + CACHE_TTL_MS,
+      });
+    }
+    return result;
+  } catch (err) {
+    // Graceful fallback if composite index is still building in Firebase Console
+    const code =
+      typeof err === 'object' && err !== null && 'code' in err
+        ? String((err as { code?: unknown }).code)
+        : '';
+    if (code === 'failed-precondition') {
+      try {
+        const fallbackQ = query(
+          collection(db, path),
+          where('dateKey', '==', dateKey),
+          limit(pageSize)
+        );
+        const snap = await getDocs(fallbackQ);
+        const rows = snap.docs
+          .map((docSnap) => mapDailyScoreDoc(docSnap, dateKey))
+          .sort((a, b) => a.moves - b.moves || a.timeSeconds - b.timeSeconds);
+        const result: PaginatedResult<DailyScoreEntry> = {
+          entries: rows,
+          nextCursor: null,
+          hasMore: false,
+        };
+        if (!cursor) {
+          dailyFirstPageCache.set(dateKey, {
+            data: result,
+            expiresAt: Date.now() + CACHE_TTL_MS,
+          });
+        }
+        return result;
+      } catch (fallbackErr) {
+        handleFirestoreError(fallbackErr, OperationType.LIST, path);
+      }
+    }
+    handleFirestoreError(err, OperationType.LIST, path);
   }
 }
 
 export async function fetchDailyLeaderboard(
   dateKey: string
 ): Promise<DailyScoreEntry[]> {
-  const path = 'dailyScores';
-  try {
-    const q = query(
-      collection(db, path),
-      where('dateKey', '==', dateKey),
-      limit(50)
-    );
-    const snap = await getDocs(q);
-    const rows: DailyScoreEntry[] = snap.docs.map((docSnap) => {
-      const d = docSnap.data();
-      return {
-        userId: String(d.userId ?? ''),
-        dateKey: String(d.dateKey ?? dateKey),
-        levelId: Number(d.levelId ?? 1),
-        displayName: String(d.displayName ?? 'Player'),
-        photoURL: String(d.photoURL ?? ''),
-        moves: Number(d.moves ?? 9999),
-        timeSeconds: Number(d.timeSeconds ?? 86400),
-        stars: Number(d.stars ?? 0),
-      };
-    });
-    rows.sort((a, b) => a.moves - b.moves || a.timeSeconds - b.timeSeconds);
-    return rows.slice(0, 25);
-  } catch (err) {
-    handleFirestoreError(err, OperationType.LIST, path);
-  }
+  const res = await fetchDailyLeaderboardPage(dateKey, null, false, LEADERBOARD_PAGE_SIZE);
+  return res.entries;
 }

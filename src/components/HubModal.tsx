@@ -18,9 +18,10 @@ import {
   Trophy,
   X,
 } from 'lucide-react';
+import { DocumentData, QueryDocumentSnapshot } from 'firebase/firestore';
 import {
-  fetchDailyLeaderboard,
-  fetchLeaderboardTop,
+  fetchDailyLeaderboardPage,
+  fetchLeaderboardPage,
 } from '../game/cloudSync';
 import {
   ACHIEVEMENTS,
@@ -37,6 +38,7 @@ import {
   Language,
   LeaderboardEntry,
 } from '../game/types';
+import { LeaderboardListSkeleton } from './Skeleton';
 
 export type HubTab = 'modes' | 'daily' | 'leaderboard' | 'achievements' | 'themes';
 
@@ -120,6 +122,8 @@ const HUB_COPY = {
     close: 'إغلاق',
     signInCta: 'تسجيل الدخول الآن',
     loading: 'جارٍ التحميل...',
+    loadMore: 'عرض المزيد (20)',
+    loadingMore: 'جارٍ تحميل المزيد...',
     difficulty: {
       beginner: 'مبتدئ',
       intermediate: 'متوسط',
@@ -185,6 +189,8 @@ const HUB_COPY = {
     close: 'Close',
     signInCta: 'Sign In Now',
     loading: 'Loading...',
+    loadMore: 'Load More (20)',
+    loadingMore: 'Loading more...',
     difficulty: {
       beginner: 'Beginner',
       intermediate: 'Intermediate',
@@ -221,35 +227,63 @@ export const HubModal: React.FC<HubModalProps> = ({
   const t = HUB_COPY[language];
   const [tab, setTab] = useState<HubTab>(initialTab);
   const [lbRows, setLbRows] = useState<LeaderboardEntry[]>([]);
+  const [lbCursor, setLbCursor] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [lbHasMore, setLbHasMore] = useState(false);
+
   const [dailyRows, setDailyRows] = useState<DailyScoreEntry[]>([]);
+  const [dailyCursor, setDailyCursor] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [dailyHasMore, setDailyHasMore] = useState(false);
+
   const [loadingCloud, setLoadingCloud] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const todayKey = getUtcDateKey();
   const dailyLevelId = getDailyChallengeLevelId(todayKey);
   const dailyLevel = getLevelById(dailyLevelId);
   const dailyAlreadySolved = dailyCompletedDates.includes(todayKey);
 
-  const loadCloudLists = async (targetTab: HubTab) => {
+  const loadCloudLists = async (targetTab: HubTab, forceRefresh = false, append = false) => {
     if (!user?.emailVerified) return;
-    setLoadingCloud(true);
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoadingCloud(true);
+    }
     try {
       if (targetTab === 'leaderboard') {
-        const rows = await fetchLeaderboardTop();
-        setLbRows(rows);
+        const res = await fetchLeaderboardPage(append ? lbCursor : null, forceRefresh);
+        setLbRows((prev) => {
+          if (!append) return res.entries;
+          const seen = new Set(prev.map((r) => r.uid));
+          return [...prev, ...res.entries.filter((r) => !seen.has(r.uid))];
+        });
+        setLbCursor(res.nextCursor);
+        setLbHasMore(res.hasMore);
       } else if (targetTab === 'daily') {
-        const rows = await fetchDailyLeaderboard(todayKey);
-        setDailyRows(rows);
+        const res = await fetchDailyLeaderboardPage(
+          todayKey,
+          append ? dailyCursor : null,
+          forceRefresh
+        );
+        setDailyRows((prev) => {
+          if (!append) return res.entries;
+          const seen = new Set(prev.map((r) => r.userId));
+          return [...prev, ...res.entries.filter((r) => !seen.has(r.userId))];
+        });
+        setDailyCursor(res.nextCursor);
+        setDailyHasMore(res.hasMore);
       }
     } catch (err) {
       console.error('Failed to load cloud leaderboard:', err);
     } finally {
       setLoadingCloud(false);
+      setLoadingMore(false);
     }
   };
 
   useEffect(() => {
     if (tab === 'leaderboard' || tab === 'daily') {
-      void loadCloudLists(tab);
+      void loadCloudLists(tab, false, false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, user?.uid, user?.emailVerified]);
@@ -431,7 +465,7 @@ export const HubModal: React.FC<HubModalProps> = ({
                   {user?.emailVerified && (
                     <button
                       type="button"
-                      onClick={() => void loadCloudLists('daily')}
+                      onClick={() => void loadCloudLists('daily', true, false)}
                       className="text-xs font-bold text-sky-400 hover:text-sky-300 flex items-center gap-1 cursor-pointer"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${loadingCloud ? 'animate-spin' : ''}`} />
@@ -456,7 +490,7 @@ export const HubModal: React.FC<HubModalProps> = ({
                     </button>
                   </div>
                 ) : loadingCloud && dailyRows.length === 0 ? (
-                  <p className="text-xs text-slate-400 text-center py-4">{t.loading}</p>
+                  <LeaderboardListSkeleton rows={5} />
                 ) : dailyRows.length === 0 ? (
                   <p className="text-xs text-slate-400 text-center py-4">{t.lbEmpty}</p>
                 ) : (
@@ -478,6 +512,8 @@ export const HubModal: React.FC<HubModalProps> = ({
                             <img
                               src={row.photoURL}
                               alt=""
+                              loading="lazy"
+                              decoding="async"
                               referrerPolicy="no-referrer"
                               className="w-8 h-8 rounded-lg object-cover shrink-0"
                             />
@@ -500,6 +536,16 @@ export const HubModal: React.FC<HubModalProps> = ({
                         </div>
                       </div>
                     ))}
+                    {dailyHasMore && (
+                      <button
+                        type="button"
+                        disabled={loadingMore}
+                        onClick={() => void loadCloudLists('daily', false, true)}
+                        className="w-full min-h-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-xs font-bold text-sky-300 transition-colors cursor-pointer"
+                      >
+                        {loadingMore ? t.loadingMore : t.loadMore}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -513,7 +559,7 @@ export const HubModal: React.FC<HubModalProps> = ({
                 {user?.emailVerified && (
                   <button
                     type="button"
-                    onClick={() => void loadCloudLists('leaderboard')}
+                    onClick={() => void loadCloudLists('leaderboard', true, false)}
                     className="text-xs font-bold text-sky-400 hover:text-sky-300 flex items-center gap-1 cursor-pointer"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${loadingCloud ? 'animate-spin' : ''}`} />
@@ -538,7 +584,7 @@ export const HubModal: React.FC<HubModalProps> = ({
                   </button>
                 </div>
               ) : loadingCloud && lbRows.length === 0 ? (
-                <p className="text-xs text-slate-400 text-center py-6">{t.loading}</p>
+                <LeaderboardListSkeleton rows={6} />
               ) : lbRows.length === 0 ? (
                 <p className="text-xs text-slate-400 text-center py-6">{t.lbEmpty}</p>
               ) : (
@@ -570,6 +616,8 @@ export const HubModal: React.FC<HubModalProps> = ({
                           <img
                             src={entry.photoURL}
                             alt=""
+                            loading="lazy"
+                            decoding="async"
                             referrerPolicy="no-referrer"
                             className="w-9 h-9 rounded-xl object-cover shrink-0 border border-slate-700"
                           />
@@ -594,6 +642,16 @@ export const HubModal: React.FC<HubModalProps> = ({
                       </div>
                     </div>
                   ))}
+                  {lbHasMore && (
+                    <button
+                      type="button"
+                      disabled={loadingMore}
+                      onClick={() => void loadCloudLists('leaderboard', false, true)}
+                      className="w-full min-h-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-xs font-bold text-sky-300 transition-colors cursor-pointer"
+                    >
+                      {loadingMore ? t.loadingMore : t.loadMore}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
