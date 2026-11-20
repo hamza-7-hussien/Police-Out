@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">Police Out</string>
     <string name="title_activity_main">Police Out</string>
-    <string name="package_name">com.policeparking.game</string>
-    <string name="custom_url_scheme">com.policeparking.game</string>
+    <string name="package_name">com.policeout.game</string>
+    <string name="custom_url_scheme">com.policeout.game</string>
 </resources>

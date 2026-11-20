@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.policeparking.game',
+  appId: 'com.policeout.game',
   appName: 'Police Out',
   webDir: 'dist',
   backgroundColor: '#0b1017',
