@@ -385,11 +385,41 @@ export default function App() {
       }
     };
 
+    const isOAuthPopup =
+      typeof window !== 'undefined' &&
+      !Capacitor.isNativePlatform() &&
+      Boolean(window.opener) &&
+      (window.location.search.includes('code=') ||
+        window.location.hash.includes('access_token=') ||
+        window.location.search.includes('error='));
+
     void supabase.auth.getSession().then(({ data }) => {
+      if (isOAuthPopup && data.session) {
+        try {
+          const ch = new BroadcastChannel('policeout-auth');
+          ch.postMessage({ type: 'SIGNED_IN' });
+          ch.close();
+        } catch {
+          // ignore
+        }
+        window.close();
+        return;
+      }
       handleSessionUser(toAppUser(data.session?.user));
     });
 
     const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
+      if (isOAuthPopup && session) {
+        try {
+          const ch = new BroadcastChannel('policeout-auth');
+          ch.postMessage({ type: 'SIGNED_IN' });
+          ch.close();
+        } catch {
+          // ignore
+        }
+        window.close();
+        return;
+      }
       if (event === 'PASSWORD_RECOVERY') {
         recovering = true;
         setPasswordRecovery(true);
@@ -397,6 +427,16 @@ export default function App() {
       }
       handleSessionUser(toAppUser(session?.user));
     });
+
+    let authChannel: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined' && !Capacitor.isNativePlatform()) {
+      authChannel = new BroadcastChannel('policeout-auth');
+      authChannel.onmessage = () => {
+        void supabase?.auth.getSession().then(({ data }) => {
+          handleSessionUser(toAppUser(data.session?.user));
+        });
+      };
+    }
 
     const appUrlHandle = Capacitor.isNativePlatform()
       ? CapApp.addListener('appUrlOpen', async ({ url }) => {
@@ -431,6 +471,7 @@ export default function App() {
     return () => {
       mounted = false;
       subscription.subscription.unsubscribe();
+      authChannel?.close();
       if (appUrlHandle) {
         void appUrlHandle.then((h) => h.remove());
       }

@@ -1,9 +1,10 @@
 import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
 import supabasePublicConfig from './supabase-config.json';
 
-const supabaseUrl =
+export const SUPABASE_URL =
   (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim() ||
   supabasePublicConfig.url;
+const supabaseUrl = SUPABASE_URL;
 const supabaseAnonKey =
   (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim() ||
   supabasePublicConfig.anonKey;

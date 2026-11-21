@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import gameLogo from '../assets/images/police_parking_logo.webp';
 import { Language } from '../game/types';
-import { AppUser, GOOGLE_WEB_CLIENT_ID, supabase, toAppUser } from '../supabase';
+import { AppUser, GOOGLE_WEB_CLIENT_ID, SUPABASE_URL, supabase, toAppUser } from '../supabase';
 
 type AuthTab = 'signin' | 'signup' | 'reset';
 
@@ -389,6 +389,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [pendingVerifyEmail, setPendingVerifyEmail] = useState<string | null>(null);
   const [resendCooldown, setResendCooldown] = useState(0);
   const [logoError, setLogoError] = useState(false);
+  const [webOAuthReady, setWebOAuthReady] = useState(false);
   const [gisRendered, setGisRendered] = useState(false);
   const gisContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -447,7 +448,28 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     let cancelled = false;
     setGisRendered(false);
 
-    void ensureGsiScriptLoaded().then((loaded) => {
+    const initWebGoogle = async () => {
+      try {
+        if (SUPABASE_URL) {
+          const probe = await fetch(
+            `${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(window.location.origin)}`,
+            { method: 'GET', redirect: 'manual' }
+          );
+          if (probe.type === 'opaqueredirect' || (probe.status >= 200 && probe.status < 400)) {
+            if (!cancelled) {
+              setWebOAuthReady(true);
+              setGisRendered(false);
+            }
+            return;
+          }
+        }
+      } catch {
+        // Fallback to GIS
+      }
+      if (cancelled) return;
+      setWebOAuthReady(false);
+
+      const loaded = await ensureGsiScriptLoaded();
       if (cancelled || !loaded || !window.google?.accounts?.id || !gisContainerRef.current) {
         return;
       }
@@ -479,7 +501,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       } catch {
         setGisRendered(false);
       }
-    });
+    };
+
+    void initWebGoogle();
 
     return () => {
       cancelled = true;
@@ -526,6 +550,21 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       return;
     }
     clearFeedback();
+
+    // Synchronous popup open before async OAuth URL fetch when OAuth redirect is ready (works inside iframes)
+    let popupWin: Window | null = null;
+    if (!Capacitor.isNativePlatform() && webOAuthReady) {
+      const w = 500;
+      const h = 640;
+      const left = window.screenX + Math.max(0, (window.outerWidth - w) / 2);
+      const top = window.screenY + Math.max(0, (window.outerHeight - h) / 2);
+      popupWin = window.open(
+        'about:blank',
+        'policeout_google_oauth',
+        `width=${w},height=${h},left=${left},top=${top},popup=1`
+      );
+    }
+
     setBusy(true);
     try {
       if (Capacitor.isNativePlatform()) {
@@ -536,6 +575,26 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         });
         if (error) throw error;
         return;
+      }
+
+      if (webOAuthReady) {
+        const { data, error } = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: {
+            redirectTo: getRedirectUrl(),
+            skipBrowserRedirect: true,
+            queryParams: { prompt: 'select_account' },
+          },
+        });
+        if (error) throw error;
+        if (data?.url) {
+          if (popupWin) {
+            popupWin.location.href = data.url;
+          } else {
+            window.location.assign(data.url);
+          }
+          return;
+        }
       }
 
       const loaded = await ensureGsiScriptLoaded();
@@ -586,6 +645,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       });
       if (error) throw error;
     } catch (err) {
+      try {
+        popupWin?.close();
+      } catch {
+        // ignore
+      }
       setErrorMsg(mapSupabaseAuthError(err, t));
     } finally {
       setBusy(false);
