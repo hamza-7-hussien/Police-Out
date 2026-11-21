@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { User } from 'firebase/auth';
+import { AppUser } from '../supabase';
 import {
   BookOpen,
   Calendar,
@@ -35,7 +35,7 @@ interface HomeScreenProps {
   language: Language;
   muted: boolean;
   musicMuted: boolean;
-  user: User | null;
+  user: AppUser | null;
   currentLevel: LevelDef;
   optimalMoves: number;
   solvedTotal: number;

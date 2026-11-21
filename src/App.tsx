@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App as CapApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
-import { onAuthStateChanged, User } from 'firebase/auth';
 import {
   AlertTriangle,
   Award,
@@ -37,13 +36,13 @@ import { AppBootSkeleton } from './components/Skeleton';
 import { SolutionBar } from './components/SolutionBar';
 import { TutorialOverlay } from './components/TutorialOverlay';
 import { VictoryModal } from './components/VictoryModal';
-import { auth } from './firebase';
 import {
   pushPreferencesToCloud,
   pushStageProgressToCloud,
   submitDailyScore,
   syncOnSignIn,
 } from './game/cloudSync';
+import { AppUser, supabase, toAppUser } from './supabase';
 import {
   ACHIEVEMENTS,
   computeDailyStreak,
@@ -223,7 +222,7 @@ export default function App() {
   const savedRef = useRef<SavedState>(saved);
   savedRef.current = saved;
 
-  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authUser, setAuthUser] = useState<AppUser | null>(null);
   const [authReady, setAuthReady] = useState<boolean>(false);
   const [guestMode, setGuestMode] = useState<boolean>(() => {
     try {
@@ -323,7 +322,7 @@ export default function App() {
     winTimersRef.current = [];
   }, []);
 
-  const performCloudSync = useCallback(async (user: User) => {
+  const performCloudSync = useCallback(async (user: AppUser) => {
     if (!user.emailVerified) return;
     setIsSyncing(true);
     try {
@@ -352,7 +351,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    if (!supabase) {
+      setAuthReady(true);
+      return;
+    }
+
+    let mounted = true;
+    let lastSyncedUid: string | null = null;
+
+    const handleSessionUser = (user: AppUser | null) => {
+      if (!mounted) return;
       setAuthUser(user);
       setAuthReady(true);
       if (user?.emailVerified) {
@@ -363,10 +371,27 @@ export default function App() {
         }
         setGuestMode(false);
         setShowAuthModal(false);
-        void performCloudSync(user);
+        if (lastSyncedUid !== user.uid) {
+          lastSyncedUid = user.uid;
+          void performCloudSync(user);
+        }
+      } else {
+        lastSyncedUid = null;
       }
+    };
+
+    void supabase.auth.getSession().then(({ data }) => {
+      handleSessionUser(toAppUser(data.session?.user));
     });
-    return () => unsubscribe();
+
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+      handleSessionUser(toAppUser(session?.user));
+    });
+
+    return () => {
+      mounted = false;
+      subscription.subscription.unsubscribe();
+    };
   }, [performCloudSync]);
 
   useEffect(() => {
@@ -433,6 +458,7 @@ export default function App() {
     saved.tutorialSeen,
     saved.muted,
     saved.language,
+    saved.selectedTheme,
   ]);
 
   useEffect(() => {
@@ -733,18 +759,21 @@ export default function App() {
         void pushStageProgressToCloud(
           authUser,
           currentLevel.id,
-          updatedStageProg,
-          nextSaved
+          finalMoves,
+          hintsUsed,
+          solutionViewed,
+          gameMode,
+          nextSaved.currentLevelId
         ).catch((err) => console.error('Cloud stage sync error:', err));
 
         if (gameMode === 'daily') {
           void submitDailyScore(
             authUser,
             todayKey,
-            currentLevel.id,
             finalMoves,
             Math.max(1, dailyElapsed),
-            stars
+            hintsUsed,
+            solutionViewed
           ).catch((err) => console.error('Daily score submit error:', err));
         }
       }

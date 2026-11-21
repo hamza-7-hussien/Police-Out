@@ -25,6 +25,10 @@ jobs:
         run: npm install --legacy-peer-deps
 
       - name: Build web assets & sync Capacitor Android
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_GOOGLE_WEB_CLIENT_ID: ${{ secrets.VITE_GOOGLE_WEB_CLIENT_ID }}
         run: |
           npm run build
           npx cap sync android

@@ -2,22 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { SocialLogin } from '@capgo/capacitor-social-login';
 import {
-  createUserWithEmailAndPassword,
-  EmailAuthProvider,
-  fetchSignInMethodsForEmail,
-  GoogleAuthProvider,
-  linkWithCredential,
-  linkWithPopup,
-  sendEmailVerification,
-  sendPasswordResetEmail,
-  signInWithCredential,
-  signInWithEmailAndPassword,
-  signInWithPopup,
-  signOut,
-  updateProfile,
-  User,
-} from 'firebase/auth';
-import {
   AlertCircle,
   CheckCircle2,
   Cloud,
@@ -37,25 +21,24 @@ import {
   User as UserIcon,
   X,
 } from 'lucide-react';
-import firebaseConfig from '../../firebase-applet-config.json';
 import gameLogo from '../assets/images/police_parking_logo.webp';
-import { auth, googleProvider } from '../firebase';
 import { Language } from '../game/types';
+import { AppUser, GOOGLE_WEB_CLIENT_ID, supabase, toAppUser } from '../supabase';
 
 type AuthTab = 'signin' | 'signup' | 'reset';
 
 interface AuthScreenProps {
   language: Language;
   onToggleLanguage: () => void;
-  user: User | null;
+  user: AppUser | null;
   isModal?: boolean;
   isSyncing?: boolean;
   solvedCount: number;
   totalStars: number;
   onContinueGuest?: () => void;
   onCloseModal?: () => void;
-  onVerifiedRefresh?: (user: User) => Promise<void> | void;
-  onAccountUpdated?: (user: User) => void;
+  onVerifiedRefresh?: (user: AppUser) => Promise<void> | void;
+  onAccountUpdated?: (user: AppUser) => void;
 }
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -63,13 +46,12 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const AUTH_COPY = {
   ar: {
     brandTitle: 'Police Out',
-    brandSub: 'حسابك السحابي يحفظ مراحلك ونجومك تلقائياً',
+    brandSub: 'حسابك السحابي يحفظ مراحلك ونجومك بأمان كامل',
     signinTab: 'تسجيل الدخول',
     signupTab: 'حساب جديد',
     resetTab: 'نسيت أو تعيين كلمة مرور؟',
     backToSignin: 'العودة لتسجيل الدخول',
     googleBtn: 'المتابعة بحساب Google',
-    orDivider: 'أو بالبريد الإلكتروني',
     nameLabel: 'الاسم',
     namePlaceholder: 'مثال: أحمد محمد',
     emailLabel: 'البريد الإلكتروني',
@@ -82,7 +64,7 @@ const AUTH_COPY = {
     signupBtn: 'إنشاء الحساب',
     resetBtn: 'إرسال رابط تعيين / استعادة كلمة المرور',
     resetHint:
-      'إذا كنت مسجلاً بحساب Google وتريد الدخول بنفس البريد وكلمة مرور، أدخل بريدك هنا لتعيين كلمة مرور مرتبطة بحسابك.',
+      'إذا كنت مسجلاً بحساب Google وتريد الدخول بنفس البريد وكلمة مرور، أدخل بريدك هنا لتعيين كلمة مرور لحسابك.',
     guestBtn: 'اللعب كضيف (بدون حساب)',
     closeBtn: 'إغلاق',
     resetSuccess: 'تم إرسال رابط تعيين/إعادة تعيين كلمة المرور إلى بريدك الإلكتروني.',
@@ -103,13 +85,12 @@ const AUTH_COPY = {
     googleProviderLabel: 'حساب Google',
     emailProviderLabel: 'البريد وكلمة المرور',
     linkedBadge: 'مرتبط',
-    notLinkedBadge: 'غير مرتبط',
     linkGoogleBtn: 'ربط Google',
     setPassBtn: 'تعيين كلمة مرور',
     resetPassBtn: 'تغيير',
-    savePassBtn: 'حفظ وربط كلمة المرور',
+    savePassBtn: 'حفظ كلمة المرور',
     cancelBtn: 'إلغاء',
-    passLinkedOk: 'تم ربط كلمة المرور بحسابك بنجاح! يمكنك الآن الدخول بالبريد أو بـ Google.',
+    passLinkedOk: 'تم حفظ كلمة المرور لحسابك بنجاح! يمكنك الآن الدخول بالبريد أو بـ Google.',
     googleLinkedOk: 'تم ربط حساب Google بحسابك بنجاح!',
     passResetSentFromProfile: 'تم إرسال رابط تغيير كلمة المرور إلى بريدك الإلكتروني.',
     continueLocalBtn: 'متابعة اللعب محلياً الآن',
@@ -119,38 +100,28 @@ const AUTH_COPY = {
     errPasswordWeak: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل.',
     errPasswordMismatch: 'كلمة المرور وتأكيدها غير متطابقتين.',
     errInvalidCred:
-      'البريد الإلكتروني أو كلمة المرور غير صحيحة. إذا لم تنشئ حساباً بعد اضغط «حساب جديد»، وإذا كان حسابك مربوطاً بـ Google يمكنك الدخول به أو تعيين كلمة مرور من «نسيت أو تعيين كلمة مرور؟».',
-    errGoogleOnlyAccount:
-      'هذا البريد مسجل عبر Google ولم يتم تعيين كلمة مرور له بعد. اضغط «المتابعة بحساب Google» أو استخدم «نسيت أو تعيين كلمة مرور؟» لتعيين كلمة مرور للدخول العادي.',
+      'البريد الإلكتروني أو كلمة المرور غير صحيحة. تأكد من البيانات أو فعّل بريدك أولاً.',
     errEmailInUse: 'هذا البريد مسجل بالفعل. انتقل إلى «تسجيل الدخول» أو «المتابعة بحساب Google».',
-    errAccountConflict:
-      'هذا البريد مرتبط بطريقة دخول أخرى. سجّل الدخول أولاً بالطريقة الأصلية ثم اربط الحسابين من داخل ملفك الشخصي.',
     errCredAlreadyInUse: 'حساب Google هذا مرتبط بالفعل بحساب آخر.',
     errRequiresRecentLogin:
       'لتأكيد هويتك، اضغط «تغيير» لإرسال رابط تعيين كلمة المرور لبريدك أو أعد تسجيل الدخول.',
-    errOperationNotAllowed:
-      'تسجيل الدخول بالبريد غير مفعّل في إعدادات Firebase بعد. فعّل Email/Password من Firebase Console أو ادخل بحساب Google.',
-    errPopupClosed: 'تم إغلاق نافذة Google قبل إتمام الدخول.',
-    errPopupBlocked: 'المتصفح منع نافذة Google. اسمح بالنوافذ المنبثقة ثم حاول مجدداً.',
     errTooMany: 'محاولات كثيرة متتالية. انتظر قليلاً ثم أعد المحاولة.',
     errNetwork: 'تعذر الاتصال بالشبكة. تأكد من الإنترنت.',
-    errWebViewGoogle:
-      'تعذر إتمام دخول Google على هذا الجهاز. تأكد من وجود حساب Google مضاف بالهاتف ومن ربط بصمة SHA-1 للتطبيق في Firebase، أو استخدم البريد الإلكتروني أعلاه.',
-    errGoogleShaMismatch:
-      'يلزم تسجيل بصمة SHA-1 لتطبيق Police Out في إعدادات Firebase لتفعيل دخول Google على أندرويد. يمكنك حالياً الدخول بالبريد الإلكتروني أو كضيف.',
+    errGoogleUnavailable:
+      'يتطلب تسجيل دخول Google على الويب إكمال ربط Google Client Secret في إعدادات Supabase، أو يمكنك التسجيل بالبريد الإلكتروني وكلمة المرور الآن.',
     errGoogleNoAccount:
       'لا يوجد حساب Google مسجل على الهاتف أو تم إلغاء الاختيار.',
+    errServiceUnavailable: 'خدمة المزامنة السحابية غير مهيأة حالياً. يمكنك المتابعة كضيف.',
     errGeneric: 'حدث خطأ غير متوقع. حاول مرة أخرى.',
   },
   en: {
     brandTitle: 'Police Out',
-    brandSub: 'Sync your stages and stars seamlessly across devices',
+    brandSub: 'Hardened cloud sync for your stages and stars across devices',
     signinTab: 'Sign In',
     signupTab: 'Create Account',
     resetTab: 'Forgot / Set password?',
     backToSignin: 'Back to Sign In',
     googleBtn: 'Continue with Google',
-    orDivider: 'or with email',
     nameLabel: 'Display Name',
     namePlaceholder: 'e.g. Alex Mercer',
     emailLabel: 'Email Address',
@@ -163,18 +134,18 @@ const AUTH_COPY = {
     signupBtn: 'Create Account',
     resetBtn: 'Send Password Setup / Reset Link',
     resetHint:
-      'Signed in with Google before and want to sign in with Email & Password too? Enter your Google email to set a password for the same account.',
+      'Signed in with Google before and want an app password too? Enter your email to set or reset your password.',
     guestBtn: 'Play as Guest (Offline)',
     closeBtn: 'Close',
     resetSuccess: 'Password setup/reset link sent! Check your inbox.',
     verifyTitle: 'Verify Your Email to Sync',
     verifyBody:
-      'We sent a verification link to your email. Open it, confirm your address, then tap Refresh to enable cloud sync.',
+      'We sent a confirmation link to your email. Open it, confirm your address, then tap Refresh to enable cloud sync.',
     verifyRefreshBtn: 'I Verified — Refresh',
-    verifyResendBtn: 'Resend Verification Email',
+    verifyResendBtn: 'Resend Confirmation Email',
     verifyWaitBtn: 'Resend in',
     verifyNotYet: 'Email is not verified yet. Check your inbox or spam folder.',
-    verifyResentOk: 'Verification link sent again to your email.',
+    verifyResentOk: 'Confirmation link sent again to your email.',
     continueLocalBtn: 'Continue Playing Locally',
     profileTitle: 'Player Profile',
     cloudSynced: 'Cloud Sync Active',
@@ -185,13 +156,12 @@ const AUTH_COPY = {
     googleProviderLabel: 'Google Account',
     emailProviderLabel: 'Email & Password',
     linkedBadge: 'Linked',
-    notLinkedBadge: 'Not Linked',
     linkGoogleBtn: 'Link Google',
     setPassBtn: 'Set Password',
     resetPassBtn: 'Change',
-    savePassBtn: 'Save & Link Password',
+    savePassBtn: 'Save Password',
     cancelBtn: 'Cancel',
-    passLinkedOk: 'Password linked! You can now sign in with Email & Password or Google.',
+    passLinkedOk: 'Password saved! You can now sign in with Email & Password or Google.',
     googleLinkedOk: 'Google account linked to your profile!',
     passResetSentFromProfile: 'Password reset link sent to your email address.',
     signOutBtn: 'Sign Out',
@@ -200,69 +170,61 @@ const AUTH_COPY = {
     errPasswordWeak: 'Password must be at least 6 characters.',
     errPasswordMismatch: 'Passwords do not match.',
     errInvalidCred:
-      'Incorrect email or password. If you have not created an account yet, use Create Account first — or if you signed up with Google, use Google Sign-In or "Forgot / Set password?" to set a password.',
-    errGoogleOnlyAccount:
-      'This email uses Google Sign-In and does not have an app password yet. Sign in with Google below or use "Forgot / Set password?" to set one.',
+      'Incorrect email or password, or your email is not confirmed yet.',
     errEmailInUse: 'This email is already registered. Try Sign In or Continue with Google.',
-    errAccountConflict:
-      'This email is registered with another sign-in method. Sign in with your original method first, then link accounts inside your profile.',
-    errCredAlreadyInUse: 'This Google account is already linked to another account.',
+    errCredAlreadyInUse: 'This Google account is already linked to another user.',
     errRequiresRecentLogin:
       'For security, please click Change to send a reset email or sign in again first.',
-    errOperationNotAllowed:
-      'Email/Password sign-in is not enabled in Firebase Console yet. Enable it under Authentication or use Google Sign-In.',
-    errPopupClosed: 'Google sign-in popup was closed before completing.',
-    errPopupBlocked: 'Popup was blocked by the browser. Allow popups and try again.',
     errTooMany: 'Too many attempts. Please wait a moment and try again.',
     errNetwork: 'Network error. Please check your connection.',
-    errWebViewGoogle:
-      'Google Sign-In could not complete on this device. Make sure a Google account is signed in and the APK SHA-1 fingerprint is registered in Firebase, or sign in with Email above.',
-    errGoogleShaMismatch:
-      'Android Google Sign-In requires this APK signing SHA-1 fingerprint to be registered in Firebase Console. Meanwhile, you can use Email & Password or Guest mode.',
+    errGoogleUnavailable:
+      'Google web OAuth requires configuring the Google Client Secret in Supabase Dashboard, or you can sign in with Email & Password now.',
     errGoogleNoAccount:
       'No Google account found on device or sign-in was cancelled.',
+    errServiceUnavailable: 'Cloud sync is not configured right now. You can play in Guest mode.',
     errGeneric: 'Something went wrong. Please try again.',
   },
 };
 
-function mapFirebaseError(err: unknown, t: (typeof AUTH_COPY)['en']): string {
-  const code =
-    typeof err === 'object' && err !== null && 'code' in err
-      ? String((err as { code?: unknown }).code)
-      : '';
-  switch (code) {
-    case 'auth/invalid-credential':
-    case 'auth/user-not-found':
-    case 'auth/wrong-password':
-      return t.errInvalidCred;
-    case 'auth/email-already-in-use':
-      return t.errEmailInUse;
-    case 'auth/account-exists-with-different-credential':
-      return t.errAccountConflict;
-    case 'auth/credential-already-in-use':
-      return t.errCredAlreadyInUse;
-    case 'auth/requires-recent-login':
-      return t.errRequiresRecentLogin;
-    case 'auth/invalid-email':
-      return t.errEmailInvalid;
-    case 'auth/weak-password':
-      return t.errPasswordWeak;
-    case 'auth/operation-not-allowed':
-      return t.errOperationNotAllowed;
-    case 'auth/popup-closed-by-user':
-    case 'auth/cancelled-popup-request':
-      return t.errPopupClosed;
-    case 'auth/popup-blocked':
-      return t.errPopupBlocked;
-    case 'auth/too-many-requests':
-      return t.errTooMany;
-    case 'auth/network-request-failed':
-      return t.errNetwork;
-    case 'auth/operation-not-supported-in-this-environment':
-      return t.errWebViewGoogle;
-    default:
-      return t.errGeneric;
+function mapSupabaseAuthError(err: unknown, t: (typeof AUTH_COPY)['en']): string {
+  const msg =
+    err instanceof Error
+      ? err.message.toLowerCase()
+      : typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message?: unknown }).message).toLowerCase()
+        : String(err).toLowerCase();
+
+  if (msg.includes('invalid login credentials') || msg.includes('invalid_credentials')) {
+    return t.errInvalidCred;
   }
+  if (msg.includes('email not confirmed')) {
+    return t.verifyNotYet;
+  }
+  if (msg.includes('already registered') || msg.includes('already exists')) {
+    return t.errEmailInUse;
+  }
+  if (msg.includes('identity is already linked')) {
+    return t.errCredAlreadyInUse;
+  }
+  if (msg.includes('invalid email')) {
+    return t.errEmailInvalid;
+  }
+  if (msg.includes('password') && (msg.includes('least') || msg.includes('weak') || msg.includes('short'))) {
+    return t.errPasswordWeak;
+  }
+  if (msg.includes('rate limit') || msg.includes('too many requests')) {
+    return t.errTooMany;
+  }
+  if (msg.includes('network') || msg.includes('failed to fetch')) {
+    return t.errNetwork;
+  }
+  if (msg.includes('reauth') || msg.includes('recent')) {
+    return t.errRequiresRecentLogin;
+  }
+  if (msg.includes('provider') && msg.includes('not enabled')) {
+    return t.errGoogleUnavailable;
+  }
+  return t.errGeneric;
 }
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({
@@ -289,11 +251,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [showLinkPasswordForm, setShowLinkPasswordForm] = useState(false);
   const [linkPass, setLinkPass] = useState('');
   const [linkPassConfirm, setLinkPassConfirm] = useState('');
-  const [, setProviderTick] = useState(0);
 
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
+  const [pendingVerifyEmail, setPendingVerifyEmail] = useState<string | null>(null);
   const [resendCooldown, setResendCooldown] = useState(0);
   const [logoError, setLogoError] = useState(false);
 
@@ -310,10 +272,20 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     setInfoMsg(null);
   };
 
-  const getNativeGoogleCredential = async () => {
+  const getRedirectUrl = () => {
+    if (Capacitor.isNativePlatform()) {
+      return 'com.policeout.game://auth-callback';
+    }
+    return window.location.origin;
+  };
+
+  const getNativeGoogleIdToken = async (): Promise<string> => {
+    if (!GOOGLE_WEB_CLIENT_ID) {
+      throw new Error('MISSING_GOOGLE_WEB_CLIENT_ID');
+    }
     await SocialLogin.initialize({
       google: {
-        webClientId: firebaseConfig.oAuthClientId,
+        webClientId: GOOGLE_WEB_CLIENT_ID,
         mode: 'online',
         skipAuthOnlyAuthorizationAfterSignIn: true,
       },
@@ -325,83 +297,77 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     if (res.result.responseType !== 'online' || !res.result.idToken) {
       throw new Error('MISSING_ID_TOKEN');
     }
-    return GoogleAuthProvider.credential(res.result.idToken);
-  };
-
-  const handleGoogleError = (err: unknown) => {
-    const rawMsg =
-      err instanceof Error
-        ? err.message
-        : typeof err === 'object' && err !== null && 'message' in err
-          ? String((err as { message?: unknown }).message)
-          : String(err);
-    const code =
-      typeof err === 'object' && err !== null && 'code' in err
-        ? String((err as { code?: unknown }).code)
-        : '';
-    if (code) {
-      setErrorMsg(mapFirebaseError(err, t));
-      return;
-    }
-    if (Capacitor.isNativePlatform()) {
-      if (
-        rawMsg.includes('28444') ||
-        rawMsg.toLowerCase().includes('developer console') ||
-        rawMsg.includes('10:')
-      ) {
-        setErrorMsg(t.errGoogleShaMismatch);
-      } else if (
-        rawMsg.includes('USER_CANCELLED') ||
-        rawMsg.toLowerCase().includes('cancel') ||
-        rawMsg.toLowerCase().includes('no credential')
-      ) {
-        setErrorMsg(t.errGoogleNoAccount);
-      } else if (rawMsg.toLowerCase().includes('network')) {
-        setErrorMsg(t.errNetwork);
-      } else {
-        setErrorMsg(t.errWebViewGoogle);
-      }
-    } else {
-      setErrorMsg(mapFirebaseError(err, t));
-    }
+    return res.result.idToken;
   };
 
   const handleGoogleSignIn = async () => {
+    if (!supabase) {
+      setErrorMsg(t.errServiceUnavailable);
+      return;
+    }
     clearFeedback();
     setBusy(true);
     try {
       if (Capacitor.isNativePlatform()) {
-        const credential = await getNativeGoogleCredential();
-        await signInWithCredential(auth, credential);
+        const idToken = await getNativeGoogleIdToken();
+        const { error } = await supabase.auth.signInWithIdToken({
+          provider: 'google',
+          token: idToken,
+        });
+        if (error) throw error;
       } else {
-        await signInWithPopup(auth, googleProvider);
+        const { error } = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: {
+            redirectTo: getRedirectUrl(),
+            queryParams: { prompt: 'select_account' },
+          },
+        });
+        if (error) throw error;
       }
     } catch (err) {
-      handleGoogleError(err);
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      if (
+        Capacitor.isNativePlatform() &&
+        (rawMsg.includes('USER_CANCELLED') ||
+          rawMsg.toLowerCase().includes('cancel') ||
+          rawMsg.toLowerCase().includes('no credential'))
+      ) {
+        setErrorMsg(t.errGoogleNoAccount);
+      } else if (!Capacitor.isNativePlatform()) {
+        setErrorMsg(t.errGoogleUnavailable);
+      } else {
+        setErrorMsg(mapSupabaseAuthError(err, t));
+      }
     } finally {
       setBusy(false);
     }
   };
 
   const handleLinkGoogle = async () => {
-    if (!user) return;
+    if (!supabase || !user) return;
     clearFeedback();
     setBusy(true);
     try {
       if (Capacitor.isNativePlatform()) {
-        const credential = await getNativeGoogleCredential();
-        await linkWithCredential(user, credential);
+        const idToken = await getNativeGoogleIdToken();
+        const { data, error } = await supabase.auth.signInWithIdToken({
+          provider: 'google',
+          token: idToken,
+        });
+        if (error) throw error;
+        const nextUser = toAppUser(data.user);
+        if (nextUser) onAccountUpdated?.(nextUser);
+        setInfoMsg(t.googleLinkedOk);
       } else {
-        await linkWithPopup(user, googleProvider);
+        const { error } = await supabase.auth.linkIdentity({
+          provider: 'google',
+          options: { redirectTo: getRedirectUrl() },
+        });
+        if (error) throw error;
       }
-      await user.reload();
-      if (auth.currentUser) {
-        onAccountUpdated?.(auth.currentUser);
-      }
-      setProviderTick((v) => v + 1);
-      setInfoMsg(t.googleLinkedOk);
     } catch (err) {
-      handleGoogleError(err);
+      setErrorMsg(mapSupabaseAuthError(err, t));
     } finally {
       setBusy(false);
     }
@@ -409,7 +375,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
   const handleLinkPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !user.email) return;
+    if (!supabase || !user) return;
     clearFeedback();
 
     if (linkPass.length < 6) {
@@ -423,33 +389,35 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
     setBusy(true);
     try {
-      const cred = EmailAuthProvider.credential(user.email, linkPass);
-      await linkWithCredential(user, cred);
-      await user.reload();
-      if (auth.currentUser) {
-        onAccountUpdated?.(auth.currentUser);
-      }
-      setProviderTick((v) => v + 1);
+      const { data, error } = await supabase.auth.updateUser({
+        password: linkPass,
+      });
+      if (error) throw error;
+      const nextUser = toAppUser(data.user);
+      if (nextUser) onAccountUpdated?.(nextUser);
       setShowLinkPasswordForm(false);
       setLinkPass('');
       setLinkPassConfirm('');
       setInfoMsg(t.passLinkedOk);
     } catch (err) {
-      setErrorMsg(mapFirebaseError(err, t));
+      setErrorMsg(mapSupabaseAuthError(err, t));
     } finally {
       setBusy(false);
     }
   };
 
   const handleSendProfilePasswordReset = async () => {
-    if (!user?.email) return;
+    if (!supabase || !user?.email) return;
     clearFeedback();
     setBusy(true);
     try {
-      await sendPasswordResetEmail(auth, user.email);
+      const { error } = await supabase.auth.resetPasswordForEmail(user.email, {
+        redirectTo: getRedirectUrl(),
+      });
+      if (error) throw error;
       setInfoMsg(t.passResetSentFromProfile);
     } catch (err) {
-      setErrorMsg(mapFirebaseError(err, t));
+      setErrorMsg(mapSupabaseAuthError(err, t));
     } finally {
       setBusy(false);
     }
@@ -457,6 +425,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
   const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!supabase) {
+      setErrorMsg(t.errServiceUnavailable);
+      return;
+    }
     clearFeedback();
 
     const trimmedEmail = email.trim().toLowerCase();
@@ -468,10 +440,13 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     if (tab === 'reset') {
       setBusy(true);
       try {
-        await sendPasswordResetEmail(auth, trimmedEmail);
+        const { error } = await supabase.auth.resetPasswordForEmail(trimmedEmail, {
+          redirectTo: getRedirectUrl(),
+        });
+        if (error) throw error;
         setInfoMsg(t.resetSuccess);
       } catch (err) {
-        setErrorMsg(mapFirebaseError(err, t));
+        setErrorMsg(mapSupabaseAuthError(err, t));
       } finally {
         setBusy(false);
       }
@@ -496,73 +471,102 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     setBusy(true);
     try {
       if (tab === 'signin') {
-        await signInWithEmailAndPassword(auth, trimmedEmail, password);
-      } else {
-        const cred = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
-        await updateProfile(cred.user, {
-          displayName: name.trim().slice(0, 80),
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: trimmedEmail,
+          password,
         });
-        await sendEmailVerification(cred.user);
-        setResendCooldown(60);
-      }
-    } catch (err) {
-      const code =
-        typeof err === 'object' && err !== null && 'code' in err
-          ? String((err as { code?: unknown }).code)
-          : '';
-      if (
-        tab === 'signin' &&
-        (code === 'auth/invalid-credential' ||
-          code === 'auth/user-not-found' ||
-          code === 'auth/wrong-password')
-      ) {
-        try {
-          const methods = await fetchSignInMethodsForEmail(auth, trimmedEmail);
-          if (methods.includes('google.com') && !methods.includes('password')) {
-            setErrorMsg(t.errGoogleOnlyAccount);
-            setBusy(false);
-            return;
-          }
-        } catch {
-          // Enumeration protection may return empty; fall through to standard clear guidance
+        if (error) throw error;
+        const appUser = toAppUser(data.user);
+        if (appUser && !appUser.emailVerified) {
+          setPendingVerifyEmail(trimmedEmail);
+        }
+      } else {
+        const { data, error } = await supabase.auth.signUp({
+          email: trimmedEmail,
+          password,
+          options: {
+            emailRedirectTo: getRedirectUrl(),
+            data: {
+              display_name: name.trim().slice(0, 80),
+            },
+          },
+        });
+        if (error) throw error;
+        const appUser = toAppUser(data.user);
+        if (!appUser?.emailVerified) {
+          setPendingVerifyEmail(trimmedEmail);
+          setResendCooldown(60);
         }
       }
-      setErrorMsg(mapFirebaseError(err, t));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message.toLowerCase() : '';
+      if (msg.includes('email not confirmed')) {
+        setPendingVerifyEmail(trimmedEmail);
+      }
+      setErrorMsg(mapSupabaseAuthError(err, t));
     } finally {
       setBusy(false);
     }
   };
 
   const handleRefreshVerification = async () => {
-    if (!user) return;
+    if (!supabase) return;
     clearFeedback();
     setBusy(true);
     try {
-      await user.reload();
-      await user.getIdToken(true);
-      const refreshed = auth.currentUser;
-      if (refreshed?.emailVerified) {
-        await onVerifiedRefresh?.(refreshed);
-      } else {
-        setErrorMsg(t.verifyNotYet);
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (sessionData.session) {
+        await supabase.auth.refreshSession();
+        const { data, error } = await supabase.auth.getUser();
+        if (error) throw error;
+        const refreshed = toAppUser(data.user);
+        if (refreshed?.emailVerified) {
+          setPendingVerifyEmail(null);
+          await onVerifiedRefresh?.(refreshed);
+          return;
+        }
       }
+      // Also allow trying password sign-in if email+password are still filled in state
+      if (pendingVerifyEmail && password.length >= 6) {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: pendingVerifyEmail,
+          password,
+        });
+        if (!error) {
+          const refreshed = toAppUser(data.user);
+          if (refreshed?.emailVerified) {
+            setPendingVerifyEmail(null);
+            await onVerifiedRefresh?.(refreshed);
+            return;
+          }
+        }
+      }
+      setErrorMsg(t.verifyNotYet);
     } catch (err) {
-      setErrorMsg(mapFirebaseError(err, t));
+      setErrorMsg(mapSupabaseAuthError(err, t));
     } finally {
       setBusy(false);
     }
   };
 
   const handleResendVerification = async () => {
-    if (!user || resendCooldown > 0) return;
+    const targetEmail = user?.email || pendingVerifyEmail;
+    if (!supabase || !targetEmail || resendCooldown > 0) return;
     clearFeedback();
     setBusy(true);
     try {
-      await sendEmailVerification(user);
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: targetEmail,
+        options: {
+          emailRedirectTo: getRedirectUrl(),
+        },
+      });
+      if (error) throw error;
       setInfoMsg(t.verifyResentOk);
       setResendCooldown(60);
     } catch (err) {
-      setErrorMsg(mapFirebaseError(err, t));
+      setErrorMsg(mapSupabaseAuthError(err, t));
     } finally {
       setBusy(false);
     }
@@ -575,10 +579,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       if (Capacitor.isNativePlatform()) {
         await SocialLogin.logout({ provider: 'google' }).catch(() => undefined);
       }
-      await signOut(auth);
+      await supabase?.auth.signOut();
+      setPendingVerifyEmail(null);
       onCloseModal?.();
     } catch (err) {
-      setErrorMsg(mapFirebaseError(err, t));
+      setErrorMsg(mapSupabaseAuthError(err, t));
     } finally {
       setBusy(false);
     }
@@ -587,11 +592,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const renderCardBody = () => {
     // Case 1: Signed-in & Verified Profile View
     if (user && user.emailVerified) {
-      const displayName =
-        user.displayName?.trim() || user.email?.split('@')[0] || 'Player';
+      const displayName = user.displayName || 'Officer';
       const initials = displayName.slice(0, 2).toUpperCase();
-      const hasGoogle = user.providerData.some((p) => p.providerId === 'google.com');
-      const hasPassword = user.providerData.some((p) => p.providerId === 'password');
 
       return (
         <div className="p-6 max-h-[85dvh] overflow-y-auto">
@@ -662,7 +664,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             </div>
           </div>
 
-          {/* Connected Sign-In Methods (Instagram/Enterprise Style Account Linking) */}
+          {/* Connected Sign-In Methods */}
           <div className="p-3.5 rounded-2xl bg-slate-950/70 border border-slate-800 mb-4 space-y-2.5">
             <div className="flex items-center gap-1.5 text-xs font-extrabold text-slate-300">
               <Link2 className="w-3.5 h-3.5 text-sky-400" />
@@ -684,7 +686,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   {t.googleProviderLabel}
                 </span>
               </div>
-              {hasGoogle ? (
+              {user.hasGoogle ? (
                 <span className="text-[11px] font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/35 px-2 py-1 rounded-lg shrink-0">
                   {t.linkedBadge}
                 </span>
@@ -711,7 +713,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                     {t.emailProviderLabel}
                   </span>
                 </div>
-                {hasPassword ? (
+                {user.hasPassword ? (
                   <div className="flex items-center gap-1.5 shrink-0">
                     <span className="text-[11px] font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/35 px-2 py-1 rounded-lg">
                       {t.linkedBadge}
@@ -740,7 +742,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 )}
               </div>
 
-              {!hasPassword && showLinkPasswordForm && (
+              {!user.hasPassword && showLinkPasswordForm && (
                 <form onSubmit={handleLinkPasswordSubmit} className="space-y-2 pt-2 border-t border-slate-800">
                   <input
                     type="password"
@@ -821,8 +823,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       );
     }
 
-    // Case 2: Signed-in with Email/Password but Email NOT Verified yet
-    if (user && !user.emailVerified) {
+    // Case 2: Signed-up / Signed-in but Email NOT Verified yet
+    const unverifiedEmail = (user && !user.emailVerified ? user.email : null) || pendingVerifyEmail;
+    if (unverifiedEmail) {
       return (
         <div className="p-6">
           <div className="flex items-start justify-between gap-2 mb-4">
@@ -847,7 +850,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             dir="ltr"
             className="px-3 py-2 rounded-xl bg-slate-950/80 border border-slate-800 text-xs text-sky-300 font-num truncate mb-4 text-center"
           >
-            {user.email}
+            {unverifiedEmail}
           </div>
 
           {errorMsg && (
@@ -916,7 +919,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     // Case 3: Sign In / Sign Up / Password Reset
     return (
       <div className="p-5 sm:p-6">
-        {/* Top Row: Brand Badge + Close / Language */}
         <div className="flex items-start justify-between gap-2 mb-4">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-12 h-12 rounded-2xl bg-slate-950 border border-slate-700/80 flex items-center justify-center text-amber-400 shadow-lg shrink-0 relative overflow-hidden">
@@ -1095,11 +1097,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
                   className="w-10 h-10 absolute top-1/2 -translate-y-1/2 end-1 text-slate-400 hover:text-white flex items-center justify-center cursor-pointer"
                 >
-                  {showPassword ? (
-                    <EyeOff className="w-4 h-4" />
-                  ) : (
-                    <Eye className="w-4 h-4" />
-                  )}
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
             </div>
@@ -1211,7 +1209,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       className="relative w-full max-w-md rounded-3xl bg-slate-900 border border-slate-700/80 shadow-2xl overflow-hidden"
       onClick={(e) => e.stopPropagation()}
     >
-      {/* Tactical Police Red/Blue Top Lightbar Accent */}
       <div className="h-1.5 w-full flex">
         <div className="flex-1 bg-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.75)]" />
         <div className="w-6 bg-slate-200" />

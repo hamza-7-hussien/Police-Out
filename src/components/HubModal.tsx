@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { User } from 'firebase/auth';
+import { AppUser } from '../supabase';
 import {
   Award,
   BookOpen,
@@ -18,7 +18,6 @@ import {
   Trophy,
   X,
 } from 'lucide-react';
-import { DocumentData, QueryDocumentSnapshot } from 'firebase/firestore';
 import {
   fetchDailyLeaderboardPage,
   fetchLeaderboardPage,
@@ -46,7 +45,7 @@ interface HubModalProps {
   language: Language;
   initialTab?: HubTab;
   gameMode: GameMode;
-  user: User | null;
+  user: AppUser | null;
   totalStars: number;
   solvedCount: number;
   selectedTheme: BoardTheme;
@@ -227,11 +226,11 @@ export const HubModal: React.FC<HubModalProps> = ({
   const t = HUB_COPY[language];
   const [tab, setTab] = useState<HubTab>(initialTab);
   const [lbRows, setLbRows] = useState<LeaderboardEntry[]>([]);
-  const [lbCursor, setLbCursor] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [lbCursor, setLbCursor] = useState<number | null>(null);
   const [lbHasMore, setLbHasMore] = useState(false);
 
   const [dailyRows, setDailyRows] = useState<DailyScoreEntry[]>([]);
-  const [dailyCursor, setDailyCursor] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [dailyCursor, setDailyCursor] = useState<number | null>(null);
   const [dailyHasMore, setDailyHasMore] = useState(false);
 
   const [loadingCloud, setLoadingCloud] = useState(false);
