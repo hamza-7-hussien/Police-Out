@@ -239,6 +239,7 @@ export default function App() {
     }
   });
   const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
+  const [passwordRecovery, setPasswordRecovery] = useState<boolean>(false);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const hasInteractedBoardRef = useRef<boolean>(false);
   const skipNextPrefSyncRef = useRef<boolean>(false);
@@ -359,6 +360,8 @@ export default function App() {
     let mounted = true;
     let lastSyncedUid: string | null = null;
 
+    let recovering = false;
+
     const handleSessionUser = (user: AppUser | null) => {
       if (!mounted) return;
       setAuthUser(user);
@@ -370,7 +373,9 @@ export default function App() {
           // ignore
         }
         setGuestMode(false);
-        setShowAuthModal(false);
+        if (!recovering) {
+          setShowAuthModal(false);
+        }
         if (lastSyncedUid !== user.uid) {
           lastSyncedUid = user.uid;
           void performCloudSync(user);
@@ -384,13 +389,51 @@ export default function App() {
       handleSessionUser(toAppUser(data.session?.user));
     });
 
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        recovering = true;
+        setPasswordRecovery(true);
+        setShowAuthModal(true);
+      }
       handleSessionUser(toAppUser(session?.user));
     });
+
+    const appUrlHandle = Capacitor.isNativePlatform()
+      ? CapApp.addListener('appUrlOpen', async ({ url }) => {
+          if (!supabase || !url || !url.startsWith('com.policeout.game://')) return;
+          try {
+            const parsed = new URL(url);
+            const code = parsed.searchParams.get('code');
+            if (code) {
+              await supabase.auth.exchangeCodeForSession(code);
+              return;
+            }
+            const hashParams = new URLSearchParams(parsed.hash.replace(/^#/, ''));
+            const accessToken = hashParams.get('access_token');
+            const refreshToken = hashParams.get('refresh_token');
+            if (accessToken && refreshToken) {
+              await supabase.auth.setSession({
+                access_token: accessToken,
+                refresh_token: refreshToken,
+              });
+              if (hashParams.get('type') === 'recovery') {
+                recovering = true;
+                setPasswordRecovery(true);
+                setShowAuthModal(true);
+              }
+            }
+          } catch (err) {
+            console.error('Deep link auth callback failed:', err);
+          }
+        })
+      : null;
 
     return () => {
       mounted = false;
       subscription.subscription.unsubscribe();
+      if (appUrlHandle) {
+        void appUrlHandle.then((h) => h.remove());
+      }
     };
   }, [performCloudSync]);
 
@@ -1235,12 +1278,19 @@ export default function App() {
         onToggleLanguage={toggleLanguage}
         user={authUser}
         isSyncing={isSyncing}
+        passwordRecovery={passwordRecovery}
         solvedCount={solvedTotal}
         totalStars={totalStars}
         onContinueGuest={handleContinueGuest}
         onVerifiedRefresh={async (refreshed) => {
           setAuthUser(refreshed);
           await performCloudSync(refreshed);
+        }}
+        onAccountUpdated={(updated) => {
+          setAuthUser(updated);
+        }}
+        onPasswordRecoveryDone={() => {
+          setPasswordRecovery(false);
         }}
       />
     );
@@ -1828,9 +1878,13 @@ export default function App() {
           user={authUser}
           isModal
           isSyncing={isSyncing}
+          passwordRecovery={passwordRecovery}
           solvedCount={solvedTotal}
           totalStars={totalStars}
-          onCloseModal={() => setShowAuthModal(false)}
+          onCloseModal={() => {
+            setPasswordRecovery(false);
+            setShowAuthModal(false);
+          }}
           onVerifiedRefresh={async (refreshed) => {
             setAuthUser(refreshed);
             await performCloudSync(refreshed);
@@ -1838,6 +1892,10 @@ export default function App() {
           }}
           onAccountUpdated={(updated) => {
             setAuthUser(updated);
+          }}
+          onPasswordRecoveryDone={() => {
+            setPasswordRecovery(false);
+            setShowAuthModal(false);
           }}
         />
       )}

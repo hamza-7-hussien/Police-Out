@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { SocialLogin } from '@capgo/capacitor-social-login';
 import {
@@ -27,18 +27,119 @@ import { AppUser, GOOGLE_WEB_CLIENT_ID, supabase, toAppUser } from '../supabase'
 
 type AuthTab = 'signin' | 'signup' | 'reset';
 
+interface GoogleCredentialResponse {
+  credential?: string;
+}
+
+interface GooglePromptMomentNotification {
+  isNotDisplayed?: () => boolean;
+  getNotDisplayedReason?: () => string;
+  isSkippedMoment?: () => boolean;
+  getSkippedReason?: () => string;
+}
+
+interface GoogleAccountsIdApi {
+  initialize: (config: {
+    client_id: string;
+    callback: (response: GoogleCredentialResponse) => void;
+    ux_mode?: 'popup' | 'redirect';
+    auto_select?: boolean;
+    cancel_on_tap_outside?: boolean;
+  }) => void;
+  renderButton: (
+    parent: HTMLElement,
+    options: {
+      theme?: 'outline' | 'filled_blue' | 'filled_black';
+      size?: 'large' | 'medium' | 'small';
+      type?: 'standard' | 'icon';
+      shape?: 'rectangular' | 'pill' | 'circle' | 'square';
+      text?: 'signin_with' | 'signup_with' | 'continue_with' | 'signin';
+      width?: number;
+      locale?: string;
+    }
+  ) => void;
+  prompt: (listener?: (notification: GooglePromptMomentNotification) => void) => void;
+}
+
+declare global {
+  interface Window {
+    google?: {
+      accounts?: {
+        id?: GoogleAccountsIdApi;
+      };
+    };
+  }
+}
+
+let socialLoginInitPromise: Promise<void> | null = null;
+let gsiScriptLoadPromise: Promise<boolean> | null = null;
+
+function ensureGsiScriptLoaded(): Promise<boolean> {
+  if (typeof window === 'undefined') return Promise.resolve(false);
+  if (window.google?.accounts?.id) return Promise.resolve(true);
+  if (gsiScriptLoadPromise) return gsiScriptLoadPromise;
+
+  gsiScriptLoadPromise = new Promise<boolean>((resolve) => {
+    const existing = document.querySelector<HTMLScriptElement>(
+      'script[src="https://accounts.google.com/gsi/client"]'
+    );
+    if (existing) {
+      if (window.google?.accounts?.id) {
+        resolve(true);
+        return;
+      }
+      existing.addEventListener('load', () => resolve(Boolean(window.google?.accounts?.id)), {
+        once: true,
+      });
+      existing.addEventListener('error', () => resolve(false), { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve(Boolean(window.google?.accounts?.id));
+    script.onerror = () => resolve(false);
+    document.head.appendChild(script);
+  });
+
+  return gsiScriptLoadPromise;
+}
+
+async function ensureNativeSocialLoginInitialized(): Promise<void> {
+  if (!GOOGLE_WEB_CLIENT_ID) {
+    throw new Error('MISSING_GOOGLE_WEB_CLIENT_ID');
+  }
+  if (!socialLoginInitPromise) {
+    socialLoginInitPromise = SocialLogin.initialize({
+      google: {
+        webClientId: GOOGLE_WEB_CLIENT_ID,
+        mode: 'online',
+        skipAuthOnlyAuthorizationAfterSignIn: true,
+      },
+    }).catch((err) => {
+      socialLoginInitPromise = null;
+      throw err;
+    });
+  }
+  await socialLoginInitPromise;
+}
+
 interface AuthScreenProps {
   language: Language;
   onToggleLanguage: () => void;
   user: AppUser | null;
   isModal?: boolean;
   isSyncing?: boolean;
+  passwordRecovery?: boolean;
   solvedCount: number;
   totalStars: number;
   onContinueGuest?: () => void;
   onCloseModal?: () => void;
   onVerifiedRefresh?: (user: AppUser) => Promise<void> | void;
   onAccountUpdated?: (user: AppUser) => void;
+  onPasswordRecoveryDone?: () => void;
 }
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -100,7 +201,7 @@ const AUTH_COPY = {
     errPasswordWeak: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل.',
     errPasswordMismatch: 'كلمة المرور وتأكيدها غير متطابقتين.',
     errInvalidCred:
-      'البريد الإلكتروني أو كلمة المرور غير صحيحة. تأكد من البيانات أو فعّل بريدك أولاً.',
+      'البريد الإلكتروني أو كلمة المرور غير صحيحة. (إذا كان حسابك من قبل التحديث السحابي الجديد، أنشئ حسابك مجدداً من تبويب «حساب جديد» بنفس بريدك وستُحفظ مراحلك).',
     errEmailInUse: 'هذا البريد مسجل بالفعل. انتقل إلى «تسجيل الدخول» أو «المتابعة بحساب Google».',
     errCredAlreadyInUse: 'حساب Google هذا مرتبط بالفعل بحساب آخر.',
     errRequiresRecentLogin:
@@ -108,11 +209,18 @@ const AUTH_COPY = {
     errTooMany: 'محاولات كثيرة متتالية. انتظر قليلاً ثم أعد المحاولة.',
     errNetwork: 'تعذر الاتصال بالشبكة. تأكد من الإنترنت.',
     errGoogleUnavailable:
-      'يتطلب تسجيل دخول Google على الويب إكمال ربط Google Client Secret في إعدادات Supabase، أو يمكنك التسجيل بالبريد الإلكتروني وكلمة المرور الآن.',
+      'لتفعيل زر Google على هذا النطاق على الويب، أضف النطاق الحالي في Authorized JavaScript Origins بـ Google Cloud Console أو استخدم البريد وكلمة المرور الآن:',
+    errGoogleShaMismatch:
+      'إعدادات بصمة التطبيق (SHA-1) أو اسم الحزمة com.policeout.game غير مطابقة في Google Cloud Console لهذا الإصدار. تأكد من إضافة بصمة SHA-1 في Google Cloud Console أو سجّل الدخول بالبريد وكلمة المرور.',
+    errGoogleReauth:
+      'تعذر التحقق من حساب Google على الهاتف. تأكد من تسجيل الدخول بحساب Google على الجهاز أو أن شاشة الموافقة في Google Cloud منشورة (Published).',
     errGoogleNoAccount:
       'لا يوجد حساب Google مسجل على الهاتف أو تم إلغاء الاختيار.',
     errServiceUnavailable: 'خدمة المزامنة السحابية غير مهيأة حالياً. يمكنك المتابعة كضيف.',
-    errGeneric: 'حدث خطأ غير متوقع. حاول مرة أخرى.',
+    errGeneric: 'تعذر إتمام العملية:',
+    recoveryTitle: 'تعيين كلمة مرور جديدة',
+    recoveryHint: 'أدخل كلمة المرور الجديدة لحسابك الآن.',
+    recoverySavedOk: 'تم تحديث كلمة المرور بنجاح!',
   },
   en: {
     brandTitle: 'Police Out',
@@ -170,7 +278,7 @@ const AUTH_COPY = {
     errPasswordWeak: 'Password must be at least 6 characters.',
     errPasswordMismatch: 'Passwords do not match.',
     errInvalidCred:
-      'Incorrect email or password, or your email is not confirmed yet.',
+      'Incorrect email or password. (If your account was from before the cloud update, please register once in "Create Account" — your local stages will sync).',
     errEmailInUse: 'This email is already registered. Try Sign In or Continue with Google.',
     errCredAlreadyInUse: 'This Google account is already linked to another user.',
     errRequiresRecentLogin:
@@ -178,21 +286,32 @@ const AUTH_COPY = {
     errTooMany: 'Too many attempts. Please wait a moment and try again.',
     errNetwork: 'Network error. Please check your connection.',
     errGoogleUnavailable:
-      'Google web OAuth requires configuring the Google Client Secret in Supabase Dashboard, or you can sign in with Email & Password now.',
+      'To enable Google Sign-In on this web origin, add this origin to Authorized JavaScript Origins in Google Cloud Console, or sign in with Email & Password:',
+    errGoogleShaMismatch:
+      'Android package (com.policeout.game) or signing SHA-1 mismatch in Google Cloud Console. Please verify your Android OAuth client SHA-1 or use Email & Password.',
+    errGoogleReauth:
+      'Google account verification failed on device. Check your device Google account or ensure the Google OAuth consent screen is Published.',
     errGoogleNoAccount:
       'No Google account found on device or sign-in was cancelled.',
     errServiceUnavailable: 'Cloud sync is not configured right now. You can play in Guest mode.',
-    errGeneric: 'Something went wrong. Please try again.',
+    errGeneric: 'Could not complete sign-in:',
+    recoveryTitle: 'Set a New Password',
+    recoveryHint: 'Enter your new password below.',
+    recoverySavedOk: 'Password updated successfully!',
   },
 };
 
+function extractRawErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'object' && err !== null && 'message' in err) {
+    return String((err as { message?: unknown }).message ?? '');
+  }
+  return String(err ?? '');
+}
+
 function mapSupabaseAuthError(err: unknown, t: (typeof AUTH_COPY)['en']): string {
-  const msg =
-    err instanceof Error
-      ? err.message.toLowerCase()
-      : typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message?: unknown }).message).toLowerCase()
-        : String(err).toLowerCase();
+  const raw = extractRawErrorMessage(err).trim();
+  const msg = raw.toLowerCase();
 
   if (msg.includes('invalid login credentials') || msg.includes('invalid_credentials')) {
     return t.errInvalidCred;
@@ -200,31 +319,41 @@ function mapSupabaseAuthError(err: unknown, t: (typeof AUTH_COPY)['en']): string
   if (msg.includes('email not confirmed')) {
     return t.verifyNotYet;
   }
-  if (msg.includes('already registered') || msg.includes('already exists')) {
+  if (msg.includes('already registered') || msg.includes('already exists') || msg.includes('user_already_exists')) {
     return t.errEmailInUse;
   }
   if (msg.includes('identity is already linked')) {
     return t.errCredAlreadyInUse;
   }
-  if (msg.includes('invalid email')) {
+  if (msg.includes('invalid email') || msg.includes('unable to validate email')) {
     return t.errEmailInvalid;
   }
   if (msg.includes('password') && (msg.includes('least') || msg.includes('weak') || msg.includes('short'))) {
     return t.errPasswordWeak;
   }
-  if (msg.includes('rate limit') || msg.includes('too many requests')) {
+  if (msg.includes('rate limit') || msg.includes('too many requests') || msg.includes('over_email_send_rate_limit')) {
     return t.errTooMany;
   }
-  if (msg.includes('network') || msg.includes('failed to fetch')) {
+  if (msg.includes('network') || msg.includes('failed to fetch') || msg.includes('timeout')) {
     return t.errNetwork;
+  }
+  if (msg.includes('reauth') && msg.includes('account reauth failed')) {
+    return t.errGoogleReauth;
   }
   if (msg.includes('reauth') || msg.includes('recent')) {
     return t.errRequiresRecentLogin;
   }
-  if (msg.includes('provider') && msg.includes('not enabled')) {
-    return t.errGoogleUnavailable;
+  if (msg.includes('28444') || msg.includes('developer console') || msg.includes('not configured for this installed build') || msg.includes('10:')) {
+    return t.errGoogleShaMismatch;
   }
-  return t.errGeneric;
+  if (msg.includes('user_cancelled') || msg.includes('cancel') || msg.includes('no credential')) {
+    return t.errGoogleNoAccount;
+  }
+  if (msg.includes('missing oauth secret') || (msg.includes('provider') && msg.includes('not enabled'))) {
+    return `${t.errGoogleUnavailable} ${typeof window !== 'undefined' ? window.location.origin : ''}`;
+  }
+  const cleanDetail = raw.replace(/[<>"']/g, '').slice(0, 120);
+  return cleanDetail ? `${t.errGeneric} ${cleanDetail}` : t.errGeneric;
 }
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({
@@ -233,12 +362,14 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   user,
   isModal = false,
   isSyncing = false,
+  passwordRecovery = false,
   solvedCount,
   totalStars,
   onContinueGuest,
   onCloseModal,
   onVerifiedRefresh,
   onAccountUpdated,
+  onPasswordRecoveryDone,
 }) => {
   const t = AUTH_COPY[language];
   const [tab, setTab] = useState<AuthTab>('signin');
@@ -258,6 +389,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [pendingVerifyEmail, setPendingVerifyEmail] = useState<string | null>(null);
   const [resendCooldown, setResendCooldown] = useState(0);
   const [logoError, setLogoError] = useState(false);
+  const [gisRendered, setGisRendered] = useState(false);
+  const gisContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (resendCooldown <= 0) return;
@@ -279,25 +412,112 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     return window.location.origin;
   };
 
+  const signInWithGoogleIdToken = useCallback(
+    async (idToken: string, isLinking = false) => {
+      if (!supabase) {
+        setErrorMsg(t.errServiceUnavailable);
+        return;
+      }
+      clearFeedback();
+      setBusy(true);
+      try {
+        const { data, error } = await supabase.auth.signInWithIdToken({
+          provider: 'google',
+          token: idToken,
+        });
+        if (error) throw error;
+        const nextUser = toAppUser(data.user);
+        if (isLinking && nextUser) {
+          onAccountUpdated?.(nextUser);
+          setInfoMsg(t.googleLinkedOk);
+        }
+      } catch (err) {
+        setErrorMsg(mapSupabaseAuthError(err, t));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [onAccountUpdated, t]
+  );
+
+  useEffect(() => {
+    if (Capacitor.isNativePlatform() || !GOOGLE_WEB_CLIENT_ID || !supabase) return;
+    if (user?.emailVerified || pendingVerifyEmail) return;
+
+    let cancelled = false;
+    setGisRendered(false);
+
+    void ensureGsiScriptLoaded().then((loaded) => {
+      if (cancelled || !loaded || !window.google?.accounts?.id || !gisContainerRef.current) {
+        return;
+      }
+      try {
+        window.google.accounts.id.initialize({
+          client_id: GOOGLE_WEB_CLIENT_ID,
+          ux_mode: 'popup',
+          cancel_on_tap_outside: true,
+          callback: (resp) => {
+            if (resp.credential) {
+              void signInWithGoogleIdToken(resp.credential, false);
+            }
+          },
+        });
+
+        const container = gisContainerRef.current;
+        container.innerHTML = '';
+        const targetWidth = Math.max(240, Math.min(392, container.clientWidth || 340));
+        window.google.accounts.id.renderButton(container, {
+          theme: 'outline',
+          size: 'large',
+          type: 'standard',
+          shape: 'rectangular',
+          text: 'continue_with',
+          width: targetWidth,
+          locale: language === 'ar' ? 'ar' : 'en',
+        });
+        setGisRendered(true);
+      } catch {
+        setGisRendered(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [language, pendingVerifyEmail, signInWithGoogleIdToken, user?.emailVerified]);
+
   const getNativeGoogleIdToken = async (): Promise<string> => {
-    if (!GOOGLE_WEB_CLIENT_ID) {
-      throw new Error('MISSING_GOOGLE_WEB_CLIENT_ID');
+    await ensureNativeSocialLoginInitialized();
+    try {
+      const res = await SocialLogin.login({
+        provider: 'google',
+        options: {
+          style: 'standard',
+          filterByAuthorizedAccounts: false,
+        },
+      });
+      if (res.result.responseType !== 'online' || !res.result.idToken) {
+        throw new Error('MISSING_ID_TOKEN');
+      }
+      return res.result.idToken;
+    } catch (firstErr) {
+      const firstMsg = extractRawErrorMessage(firstErr).toLowerCase();
+      if (firstMsg.includes('no credential')) {
+        const retryRes = await SocialLogin.login({
+          provider: 'google',
+          options: {
+            style: 'bottom',
+            filterByAuthorizedAccounts: false,
+            forcePrompt: true,
+          },
+        });
+        if (retryRes.result.responseType !== 'online' || !retryRes.result.idToken) {
+          throw new Error('MISSING_ID_TOKEN');
+        }
+        return retryRes.result.idToken;
+      }
+      throw firstErr;
     }
-    await SocialLogin.initialize({
-      google: {
-        webClientId: GOOGLE_WEB_CLIENT_ID,
-        mode: 'online',
-        skipAuthOnlyAuthorizationAfterSignIn: true,
-      },
-    });
-    const res = await SocialLogin.login({
-      provider: 'google',
-      options: {},
-    });
-    if (res.result.responseType !== 'online' || !res.result.idToken) {
-      throw new Error('MISSING_ID_TOKEN');
-    }
-    return res.result.idToken;
   };
 
   const handleGoogleSignIn = async () => {
@@ -315,30 +535,58 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           token: idToken,
         });
         if (error) throw error;
-      } else {
-        const { error } = await supabase.auth.signInWithOAuth({
-          provider: 'google',
-          options: {
-            redirectTo: getRedirectUrl(),
-            queryParams: { prompt: 'select_account' },
+        return;
+      }
+
+      const loaded = await ensureGsiScriptLoaded();
+      if (loaded && window.google?.accounts?.id && GOOGLE_WEB_CLIENT_ID) {
+        window.google.accounts.id.initialize({
+          client_id: GOOGLE_WEB_CLIENT_ID,
+          ux_mode: 'popup',
+          callback: (resp) => {
+            if (resp.credential) {
+              void signInWithGoogleIdToken(resp.credential, false);
+            }
           },
         });
-        if (error) throw error;
+
+        await new Promise<void>((resolve) => {
+          let settled = false;
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            resolve();
+          };
+          window.google?.accounts?.id?.prompt((notification) => {
+            if (notification.isNotDisplayed?.()) {
+              const reason = notification.getNotDisplayedReason?.() || '';
+              if (reason === 'unregistered_origin') {
+                setErrorMsg(`${t.errGoogleUnavailable} ${window.location.origin}`);
+              } else {
+                setErrorMsg(
+                  `${t.errGoogleUnavailable} ${window.location.origin}${reason ? ` (${reason})` : ''}`
+                );
+              }
+              finish();
+            } else if (notification.isSkippedMoment?.()) {
+              finish();
+            }
+          });
+          window.setTimeout(finish, 3000);
+        });
+        return;
       }
+
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: getRedirectUrl(),
+          queryParams: { prompt: 'select_account' },
+        },
+      });
+      if (error) throw error;
     } catch (err) {
-      const rawMsg = err instanceof Error ? err.message : String(err);
-      if (
-        Capacitor.isNativePlatform() &&
-        (rawMsg.includes('USER_CANCELLED') ||
-          rawMsg.toLowerCase().includes('cancel') ||
-          rawMsg.toLowerCase().includes('no credential'))
-      ) {
-        setErrorMsg(t.errGoogleNoAccount);
-      } else if (!Capacitor.isNativePlatform()) {
-        setErrorMsg(t.errGoogleUnavailable);
-      } else {
-        setErrorMsg(mapSupabaseAuthError(err, t));
-      }
+      setErrorMsg(mapSupabaseAuthError(err, t));
     } finally {
       setBusy(false);
     }
@@ -360,11 +608,29 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         if (nextUser) onAccountUpdated?.(nextUser);
         setInfoMsg(t.googleLinkedOk);
       } else {
-        const { error } = await supabase.auth.linkIdentity({
-          provider: 'google',
-          options: { redirectTo: getRedirectUrl() },
-        });
-        if (error) throw error;
+        const loaded = await ensureGsiScriptLoaded();
+        if (loaded && window.google?.accounts?.id && GOOGLE_WEB_CLIENT_ID) {
+          window.google.accounts.id.initialize({
+            client_id: GOOGLE_WEB_CLIENT_ID,
+            ux_mode: 'popup',
+            callback: (resp) => {
+              if (resp.credential) {
+                void signInWithGoogleIdToken(resp.credential, true);
+              }
+            },
+          });
+          window.google.accounts.id.prompt((notification) => {
+            if (notification.isNotDisplayed?.()) {
+              setErrorMsg(`${t.errGoogleUnavailable} ${window.location.origin}`);
+            }
+          });
+        } else {
+          const { error } = await supabase.auth.linkIdentity({
+            provider: 'google',
+            options: { redirectTo: getRedirectUrl() },
+          });
+          if (error) throw error;
+        }
       }
     } catch (err) {
       setErrorMsg(mapSupabaseAuthError(err, t));
@@ -477,7 +743,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         });
         if (error) throw error;
         const appUser = toAppUser(data.user);
-        if (appUser && !appUser.emailVerified) {
+        if (!data.session && appUser && !appUser.emailVerified) {
           setPendingVerifyEmail(trimmedEmail);
         }
       } else {
@@ -493,7 +759,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         });
         if (error) throw error;
         const appUser = toAppUser(data.user);
-        if (!appUser?.emailVerified) {
+        if (!data.session && !appUser?.emailVerified) {
           setPendingVerifyEmail(trimmedEmail);
           setResendCooldown(60);
         }
@@ -589,7 +855,94 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     }
   };
 
+  const handleRecoveryPasswordUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!supabase) return;
+    clearFeedback();
+    if (password.length < 6) {
+      setErrorMsg(t.errPasswordWeak);
+      return;
+    }
+    if (password !== confirmPassword) {
+      setErrorMsg(t.errPasswordMismatch);
+      return;
+    }
+    setBusy(true);
+    try {
+      const { data, error } = await supabase.auth.updateUser({ password });
+      if (error) throw error;
+      const updated = toAppUser(data.user);
+      if (updated) onAccountUpdated?.(updated);
+      setInfoMsg(t.recoverySavedOk);
+      onPasswordRecoveryDone?.();
+    } catch (err) {
+      setErrorMsg(mapSupabaseAuthError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const renderCardBody = () => {
+    if (passwordRecovery && user) {
+      return (
+        <div className="p-6">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <h2 className="text-lg font-extrabold text-white">{t.recoveryTitle}</h2>
+            {isModal && onCloseModal && (
+              <button
+                type="button"
+                onClick={onCloseModal}
+                aria-label={t.closeBtn}
+                className="min-w-[40px] min-h-[40px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-slate-300 mb-4">{t.recoveryHint}</p>
+          <form onSubmit={handleRecoveryPasswordUpdate} className="space-y-3">
+            <input
+              type="password"
+              dir="ltr"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={t.passwordPlaceholder}
+              autoComplete="new-password"
+              className="w-full min-h-[46px] px-3.5 rounded-xl bg-slate-950 border border-slate-800 focus:border-amber-400 focus:outline-none text-sm text-white placeholder:text-slate-600 font-num"
+            />
+            <input
+              type="password"
+              dir="ltr"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder={t.confirmPasswordPlaceholder}
+              autoComplete="new-password"
+              className="w-full min-h-[46px] px-3.5 rounded-xl bg-slate-950 border border-slate-800 focus:border-amber-400 focus:outline-none text-sm text-white placeholder:text-slate-600 font-num"
+            />
+            {errorMsg && (
+              <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-xs text-rose-200 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-400" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
+            {infoMsg && (
+              <div className="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-xs text-emerald-200 flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-400" />
+                <span>{infoMsg}</span>
+              </div>
+            )}
+            <button
+              type="submit"
+              disabled={busy}
+              className="w-full min-h-[46px] rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-extrabold text-sm cursor-pointer disabled:opacity-50"
+            >
+              {busy ? '...' : t.savePassBtn}
+            </button>
+          </form>
+        </div>
+      );
+    }
+
     // Case 1: Signed-in & Verified Profile View
     if (user && user.emailVerified) {
       const displayName = user.displayName || 'Officer';
@@ -1174,32 +1527,45 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           <div className="h-px flex-1 bg-slate-800" />
         </div>
 
-        <button
-          type="button"
-          disabled={busy}
-          onClick={handleGoogleSignIn}
-          className="w-full min-h-[48px] rounded-xl bg-white hover:bg-slate-100 active:scale-[0.99] text-slate-900 font-extrabold text-sm flex items-center justify-center gap-2.5 shadow-md transition-all cursor-pointer disabled:opacity-60"
-        >
-          <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              fill="#4285F4"
-              d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
-            />
-            <path
-              fill="#34A853"
-              d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
-            />
-            <path
-              fill="#FBBC05"
-              d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
-            />
-            <path
-              fill="#EA4335"
-              d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
-            />
-          </svg>
-          <span>{t.googleBtn}</span>
-        </button>
+        {!Capacitor.isNativePlatform() && (
+          <div
+            ref={gisContainerRef}
+            className={
+              gisRendered
+                ? 'w-full min-h-[44px] flex items-center justify-center rounded-xl overflow-hidden bg-white'
+                : 'hidden'
+            }
+          />
+        )}
+
+        {(Capacitor.isNativePlatform() || !gisRendered) && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={handleGoogleSignIn}
+            className="w-full min-h-[48px] rounded-xl bg-white hover:bg-slate-100 active:scale-[0.99] text-slate-900 font-extrabold text-sm flex items-center justify-center gap-2.5 shadow-md transition-all cursor-pointer disabled:opacity-60"
+          >
+            <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                fill="#4285F4"
+                d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
+              />
+              <path
+                fill="#34A853"
+                d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
+              />
+              <path
+                fill="#FBBC05"
+                d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
+              />
+              <path
+                fill="#EA4335"
+                d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
+              />
+            </svg>
+            <span>{t.googleBtn}</span>
+          </button>
+        )}
       </div>
     );
   };
