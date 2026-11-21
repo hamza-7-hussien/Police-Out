@@ -551,9 +551,17 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     }
     clearFeedback();
 
-    // Synchronous popup open before async OAuth URL fetch when OAuth redirect is ready (works inside iframes)
+    const inIframe = (() => {
+      try {
+        return window.self !== window.top;
+      } catch {
+        return true;
+      }
+    })();
+
+    // Synchronous popup open before async OAuth URL fetch only when inside an iframe
     let popupWin: Window | null = null;
-    if (!Capacitor.isNativePlatform() && webOAuthReady) {
+    if (!Capacitor.isNativePlatform() && webOAuthReady && inIframe) {
       const w = 500;
       const h = 640;
       const left = window.screenX + Math.max(0, (window.outerWidth - w) / 2);
@@ -578,6 +586,18 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       }
 
       if (webOAuthReady) {
+        if (!inIframe) {
+          const { error } = await supabase.auth.signInWithOAuth({
+            provider: 'google',
+            options: {
+              redirectTo: getRedirectUrl(),
+              queryParams: { prompt: 'select_account' },
+            },
+          });
+          if (error) throw error;
+          return;
+        }
+
         const { data, error } = await supabase.auth.signInWithOAuth({
           provider: 'google',
           options: {
@@ -671,6 +691,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         const nextUser = toAppUser(data.user);
         if (nextUser) onAccountUpdated?.(nextUser);
         setInfoMsg(t.googleLinkedOk);
+      } else if (webOAuthReady) {
+        const { error } = await supabase.auth.linkIdentity({
+          provider: 'google',
+          options: { redirectTo: getRedirectUrl() },
+        });
+        if (error) throw error;
       } else {
         const loaded = await ensureGsiScriptLoaded();
         if (loaded && window.google?.accounts?.id && GOOGLE_WEB_CLIENT_ID) {

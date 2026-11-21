@@ -388,7 +388,7 @@ export default function App() {
     const isOAuthPopup =
       typeof window !== 'undefined' &&
       !Capacitor.isNativePlatform() &&
-      Boolean(window.opener) &&
+      (Boolean(window.opener) || window.name === 'policeout_google_oauth') &&
       (window.location.search.includes('code=') ||
         window.location.hash.includes('access_token=') ||
         window.location.search.includes('error='));
