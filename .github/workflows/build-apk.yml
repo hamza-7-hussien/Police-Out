@@ -50,6 +50,9 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Install Android SDK 36 & Build-Tools
         run: |
           SDK_MANAGER=$(command -v sdkmanager || ls "${ANDROID_HOME:-/usr/local/lib/android/sdk}"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -n 1)
@@ -61,7 +64,16 @@ jobs:
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug assembleRelease
+          for attempt in 1 2 3; do
+            if ./gradlew assembleDebug assembleRelease --max-workers=2; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "Gradle build failed (attempt $attempt), retrying in 20s..."
+            sleep 20
+          done
 
       - name: Sign Release APK
         id: sign
