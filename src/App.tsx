@@ -42,7 +42,14 @@ import {
   submitDailyScore,
   syncOnSignIn,
 } from './game/cloudSync';
-import { AppUser, supabase, toAppUser } from './supabase';
+import {
+  AppUser,
+  isOfflineOrNetworkError,
+  isSupabaseConfigured,
+  readCachedAppUser,
+  supabase,
+  toAppUser,
+} from './supabase';
 import {
   ACHIEVEMENTS,
   computeDailyStreak,
@@ -222,8 +229,18 @@ export default function App() {
   const savedRef = useRef<SavedState>(saved);
   savedRef.current = saved;
 
-  const [authUser, setAuthUser] = useState<AppUser | null>(null);
-  const [authReady, setAuthReady] = useState<boolean>(false);
+  const initialAuthCallback =
+    typeof window !== 'undefined' &&
+    (window.location.search.includes('code=') ||
+      window.location.hash.includes('access_token=') ||
+      window.location.search.includes('error='));
+
+  const [authUser, setAuthUser] = useState<AppUser | null>(() => readCachedAppUser());
+  const authUserRef = useRef<AppUser | null>(authUser);
+  authUserRef.current = authUser;
+  const [authReady, setAuthReady] = useState<boolean>(
+    () => !isSupabaseConfigured || !initialAuthCallback
+  );
   const [guestMode, setGuestMode] = useState<boolean>(() => {
     try {
       return localStorage.getItem(GUEST_STORAGE_KEY) === '1';
@@ -323,14 +340,20 @@ export default function App() {
     winTimersRef.current = [];
   }, []);
 
-  const performCloudSync = useCallback(async (user: AppUser) => {
-    if (!user.emailVerified) return;
+  const hasSyncedCloudRef = useRef<string | null>(null);
+
+  const performCloudSync = useCallback(async (user: AppUser): Promise<boolean> => {
+    if (!user.emailVerified) return false;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return false;
+    }
     setIsSyncing(true);
     try {
       const merged = await syncOnSignIn(user, savedRef.current);
       skipNextPrefSyncRef.current = true;
       setSaved(merged);
       saveState(merged);
+      hasSyncedCloudRef.current = user.uid;
 
       if (!hasInteractedBoardRef.current) {
         const syncedLevel = getLevelById(merged.currentLevelId);
@@ -344,8 +367,10 @@ export default function App() {
           setHintStep(null);
         }
       }
+      return true;
     } catch (err) {
       console.error('Cloud sync failed:', err);
+      return false;
     } finally {
       setIsSyncing(false);
     }
@@ -358,13 +383,15 @@ export default function App() {
     }
 
     let mounted = true;
-    let lastSyncedUid: string | null = null;
-
     let recovering = false;
 
-    const handleSessionUser = (user: AppUser | null) => {
+    const handleSessionUser = (
+      user: AppUser | null,
+      options?: { skipCloudSync?: boolean }
+    ) => {
       if (!mounted) return;
       setAuthUser(user);
+      authUserRef.current = user;
       setAuthReady(true);
       if (user?.emailVerified) {
         try {
@@ -376,12 +403,15 @@ export default function App() {
         if (!recovering) {
           setShowAuthModal(false);
         }
-        if (lastSyncedUid !== user.uid) {
-          lastSyncedUid = user.uid;
+        if (
+          !options?.skipCloudSync &&
+          hasSyncedCloudRef.current !== user.uid &&
+          (typeof navigator === 'undefined' || navigator.onLine !== false)
+        ) {
           void performCloudSync(user);
         }
       } else {
-        lastSyncedUid = null;
+        hasSyncedCloudRef.current = null;
       }
     };
 
@@ -393,20 +423,52 @@ export default function App() {
         window.location.hash.includes('access_token=') ||
         window.location.search.includes('error='));
 
-    void supabase.auth.getSession().then(({ data }) => {
-      if (isOAuthPopup && data.session) {
-        try {
-          const ch = new BroadcastChannel('policeout-auth');
-          ch.postMessage({ type: 'SIGNED_IN' });
-          ch.close();
-        } catch {
-          // ignore
-        }
-        window.close();
-        return;
+    const authBootFallbackTimer = window.setTimeout(() => {
+      if (mounted) {
+        setAuthReady(true);
       }
-      handleSessionUser(toAppUser(data.session?.user));
-    });
+    }, 3500);
+
+    void supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
+        if (!mounted) return;
+        if (isOAuthPopup && data.session) {
+          try {
+            const ch = new BroadcastChannel('policeout-auth');
+            ch.postMessage({ type: 'SIGNED_IN' });
+            ch.close();
+          } catch {
+            // ignore
+          }
+          window.close();
+          return;
+        }
+        const liveUser = toAppUser(data.session?.user);
+        if (liveUser) {
+          handleSessionUser(liveUser);
+          return;
+        }
+        if (error && isOfflineOrNetworkError(error)) {
+          const cached = readCachedAppUser() ?? authUserRef.current;
+          if (cached) {
+            handleSessionUser(cached, { skipCloudSync: true });
+            return;
+          }
+        }
+        handleSessionUser(null);
+      })
+      .catch((err) => {
+        if (!mounted) return;
+        if (isOfflineOrNetworkError(err)) {
+          const cached = readCachedAppUser() ?? authUserRef.current;
+          if (cached) {
+            handleSessionUser(cached, { skipCloudSync: true });
+            return;
+          }
+        }
+        setAuthReady(true);
+      });
 
     const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
       if (isOAuthPopup && session) {
@@ -425,16 +487,56 @@ export default function App() {
         setPasswordRecovery(true);
         setShowAuthModal(true);
       }
-      handleSessionUser(toAppUser(session?.user));
+      if (event === 'SIGNED_OUT') {
+        hasSyncedCloudRef.current = null;
+        handleSessionUser(null);
+        return;
+      }
+      const nextUser = toAppUser(session?.user);
+      if (nextUser) {
+        handleSessionUser(nextUser);
+      } else if (event === 'INITIAL_SESSION' && !readCachedAppUser()) {
+        handleSessionUser(null);
+      }
     });
+
+    const handleBackOnline = () => {
+      if (!mounted || !supabase) return;
+      void supabase.auth
+        .getSession()
+        .then(({ data }) => {
+          if (!mounted) return;
+          const onlineUser = toAppUser(data.session?.user);
+          if (onlineUser) {
+            hasSyncedCloudRef.current = null;
+            handleSessionUser(onlineUser);
+          } else if (authUserRef.current?.emailVerified) {
+            void supabase?.auth.refreshSession().then(({ data: refreshed }) => {
+              if (!mounted) return;
+              const refreshedUser = toAppUser(refreshed.session?.user);
+              if (refreshedUser) {
+                hasSyncedCloudRef.current = null;
+                handleSessionUser(refreshedUser);
+              }
+            });
+          }
+        })
+        .catch(() => {
+          // ignore transient reconnect hiccup
+        });
+    };
+    window.addEventListener('online', handleBackOnline);
 
     let authChannel: BroadcastChannel | null = null;
     if (typeof BroadcastChannel !== 'undefined' && !Capacitor.isNativePlatform()) {
       authChannel = new BroadcastChannel('policeout-auth');
       authChannel.onmessage = () => {
-        void supabase?.auth.getSession().then(({ data }) => {
-          handleSessionUser(toAppUser(data.session?.user));
-        });
+        void supabase?.auth
+          .getSession()
+          .then(({ data }) => {
+            handleSessionUser(toAppUser(data.session?.user));
+          })
+          .catch(() => undefined);
       };
     }
 
@@ -470,6 +572,8 @@ export default function App() {
 
     return () => {
       mounted = false;
+      window.clearTimeout(authBootFallbackTimer);
+      window.removeEventListener('online', handleBackOnline);
       subscription.subscription.unsubscribe();
       authChannel?.close();
       if (appUrlHandle) {
@@ -525,11 +629,13 @@ export default function App() {
   // Debounced cloud sync for user preferences & active stage number
   useEffect(() => {
     if (!authUser?.emailVerified || isSyncing) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     if (skipNextPrefSyncRef.current) {
       skipNextPrefSyncRef.current = false;
       return;
     }
     const timer = window.setTimeout(() => {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
       void pushPreferencesToCloud(authUser, savedRef.current).catch((err) =>
         console.error('Preference sync error:', err)
       );

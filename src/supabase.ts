@@ -12,6 +12,99 @@ export const GOOGLE_WEB_CLIENT_ID =
   (import.meta.env.VITE_GOOGLE_WEB_CLIENT_ID as string | undefined)?.trim() ||
   supabasePublicConfig.googleWebClientId;
 
+const AUTH_REQUEST_TIMEOUT_MS = 10_000;
+
+export function isOfflineOrNetworkError(err: unknown): boolean {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return true;
+  }
+  if (!err) return false;
+  const name =
+    typeof err === 'object' && 'name' in err ? String((err as { name?: unknown }).name ?? '') : '';
+  const msg =
+    err instanceof Error
+      ? err.message
+      : typeof err === 'object' && 'message' in err
+        ? String((err as { message?: unknown }).message ?? '')
+        : String(err);
+  const lower = `${name} ${msg}`.toLowerCase();
+  return (
+    lower.includes('authretryablefetcherror') ||
+    lower.includes('failed to fetch') ||
+    lower.includes('network') ||
+    lower.includes('offline') ||
+    lower.includes('timeout') ||
+    lower.includes('aborted') ||
+    lower.includes('load failed')
+  );
+}
+
+function getSupabaseStorageKey(): string | null {
+  if (!supabaseUrl) return null;
+  try {
+    const projectRef = new URL(supabaseUrl).hostname.split('.')[0];
+    return projectRef ? `sb-${projectRef}-auth-token` : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readCachedAppUser(): AppUser | null {
+  if (typeof window === 'undefined') return null;
+  const key = getSupabaseStorageKey();
+  if (!key) return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as {
+      user?: User | null;
+      currentSession?: { user?: User | null } | null;
+      refresh_token?: string;
+      access_token?: string;
+    } | null;
+    if (!parsed || (!parsed.refresh_token && !parsed.access_token)) {
+      return null;
+    }
+    let rawUser = parsed.user ?? parsed.currentSession?.user ?? null;
+    if (!rawUser) {
+      const splitRaw = window.localStorage.getItem(`${key}-user`);
+      if (splitRaw) {
+        const splitParsed = JSON.parse(splitRaw) as { user?: User | null } | null;
+        rawUser = splitParsed?.user ?? null;
+      }
+    }
+    return toAppUser(rawUser);
+  } catch {
+    return null;
+  }
+}
+
+const offlineAwareFetch: typeof fetch = async (input, init) => {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new TypeError('Failed to fetch: device is offline');
+  }
+
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), AUTH_REQUEST_TIMEOUT_MS);
+
+  const upstreamSignal = init?.signal;
+  const onUpstreamAbort = () => controller.abort();
+  if (upstreamSignal) {
+    if (upstreamSignal.aborted) {
+      controller.abort();
+    } else {
+      upstreamSignal.addEventListener('abort', onUpstreamAbort, { once: true });
+    }
+  }
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+    upstreamSignal?.removeEventListener('abort', onUpstreamAbort);
+  }
+};
+
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 
 export const supabase: SupabaseClient | null = isSupabaseConfigured
@@ -20,6 +113,9 @@ export const supabase: SupabaseClient | null = isSupabaseConfigured
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: true,
+      },
+      global: {
+        fetch: offlineAwareFetch,
       },
     })
   : null;
